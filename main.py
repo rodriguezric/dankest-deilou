@@ -1145,21 +1145,33 @@ class Game:
                 self.status_phase = 'select'
                 return
             m = self.party.members[self.status_index % len(self.party.members)]
-            pad_x, pad_y = 16, 12
-            card_w, card_h = 600, 260
-            x = WIDTH//2 - card_w//2
-            y = VIEW_H//2 - card_h//2
-            rect = pygame.Rect(x, y, card_w, card_h)
-            pygame.draw.rect(view, (20, 20, 28), rect)
-            pygame.draw.rect(view, YELLOW, rect, 2)
-            self.r.text_big(view, f"{m.name} — Lv{m.level} {m.cls}", (x + 16, y + 14))
-            self.r.text(view, f"HP {m.hp}/{m.max_hp}   MP {m.mp}/{m.max_mp}", (x + 16, y + 48))
-            self.r.text(view, f"STR {m.str_}  IQ {m.iq}  PIE {m.piety}  VIT {m.vit}  AGI {m.agi}  LCK {m.luck}", (x + 16, y + 72))
-            self.r.text(view, f"AC {m.defense_ac:+}  ATK {m.atk_bonus:+}  Gold {m.gold}", (x + 16, y + 96))
-            self.r.text(view, f"Weapon ATK +{m.equipment.weapon_atk}   Armor AC {m.equipment.armor_ac:+}", (x + 16, y + 120))
-            inv = ", ".join(ITEMS_BY_ID.get(iid, {"name": iid})["name"] for iid in m.inventory) or "(no items)"
-            self.r.text(view, f"Items: {inv}", (x + 16, y + 152))
-            self.r.draw_center_menu(["Back"], 0)
+            # Header
+            header_x, header_y = 20, 16
+            self.r.text_big(view, f"{m.name}", (header_x, header_y))
+            self.r.text(view, f"{m.cls} - Lv {m.level}", (header_x, header_y + 34))
+            self.r.text(view, f"HP: {m.hp}/{m.max_hp}", (header_x, header_y + 60))
+            self.r.text(view, f"MP: {m.mp}/{m.max_mp}", (header_x, header_y + 84))
+
+            # Columns
+            left_x, left_y = 32, header_y + 118
+            right_x, right_y = WIDTH // 2 + 20, left_y
+
+            # Left: core stats
+            self.r.text(view, f"STR: {m.str_}", (left_x, left_y)); left_y += 20
+            self.r.text(view, f"IQ:  {m.iq}", (left_x, left_y)); left_y += 20
+            self.r.text(view, f"PIE: {m.piety}", (left_x, left_y)); left_y += 20
+            self.r.text(view, f"VIT: {m.vit}", (left_x, left_y)); left_y += 20
+            self.r.text(view, f"AGI: {m.agi}", (left_x, left_y)); left_y += 20
+            self.r.text(view, f"LCK: {m.luck}", (left_x, left_y)); left_y += 20
+
+            # Right: auxiliary stats
+            self.r.text(view, f"ATK: {m.atk_bonus:+}", (right_x, right_y)); right_y += 20
+            self.r.text(view, f"AC:  {m.defense_ac:+}", (right_x, right_y)); right_y += 20
+            self.r.text(view, f"Weapon ATK: +{m.equipment.weapon_atk}", (right_x, right_y)); right_y += 20
+            self.r.text(view, f"Armor AC:  {m.equipment.armor_ac:+}", (right_x, right_y)); right_y += 20
+
+            # Hint: how to go back
+            self.r.text_small(view, "Enter/Esc: Back", (20, VIEW_H - 28), LIGHT)
 
     def status_input(self, event):
         if event.type == pygame.KEYDOWN:
