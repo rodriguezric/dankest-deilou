@@ -94,6 +94,9 @@ SHOP_ITEMS = [
 ]
 ITEMS_BY_ID = {it["id"]: it for it in SHOP_ITEMS}
 
+# Recruiting costs per class (party pays on creation)
+CLASS_COSTS = {"Thief": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
+
 DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 DIR_NAMES = ["N", "E", "S", "W"]
 
@@ -130,7 +133,7 @@ class Character:
     mp: int = 0
     ac: int = AC_BASE
     exp: int = 0
-    gold: int = 50
+    gold: int = 0
     alive: bool = True
     equipment: Equipment = field(default_factory=Equipment)
     inventory: List[str] = field(default_factory=list)
@@ -170,6 +173,8 @@ class Party:
     def __init__(self):
         self.members: List[Character] = []
         self.active: List[int] = []
+        self.gold: int = 0
+        self.inventory: List[str] = []
 
     def alive_members(self) -> List[Character]:
         return [c for c in self.members if c.alive and c.hp > 0]
@@ -192,13 +197,20 @@ class Party:
             self.active = self.active[:ACTIVE_MAX]
 
     def to_dict(self):
-        return {"members": [m.to_dict() for m in self.members], "active": self.active}
+        return {
+            "members": [m.to_dict() for m in self.members],
+            "active": self.active,
+            "gold": self.gold,
+            "inventory": list(self.inventory),
+        }
 
     @staticmethod
     def from_dict(d):
         p = Party()
         p.members = [Character.from_dict(m) for m in d.get("members", [])]
         p.active = d.get("active", [])
+        p.gold = int(d.get("gold", 0))
+        p.inventory = list(d.get("inventory", []))
         p.clamp_active()
         return p
 
@@ -795,8 +807,9 @@ class Battle:
         alive = self.party.alive_active_members()
         for m in alive:
             m.exp += total_exp // max(1, len(alive))
-            m.gold += total_gold // max(1, len(self.party.active_members()))
-        self.log.add(f"Victory! +~{total_exp} EXP, +~{total_gold}g")
+        # Gold now goes to the party pool
+        self.party.gold += total_gold
+        self.log.add(f"Victory! +~{total_exp} EXP, +~{total_gold}g (party)")
         self.battle_over = True
         self.result = 'victory'
 
@@ -875,6 +888,9 @@ class Game:
         self.r = Renderer(self.screen)
         self.log = MessageLog()
         self.party = Party()
+        # New games start with party-level gold and no items
+        self.party.gold = 100
+        self.party.inventory = []
         self.mode = MODE_TITLE
         self.return_mode = MODE_TOWN
 
@@ -999,6 +1015,10 @@ class Game:
                 self.title_index = (self.title_index + 1) % 3
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 if self.title_index == 0:  # New Game
+                    # reset party and resources
+                    self.party = Party()
+                    self.party.gold = 100
+                    self.party.inventory = []
                     self.mode = MODE_TOWN
                 elif self.title_index == 1:  # Load
                     path = "save.json"
@@ -1016,6 +1036,7 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
         self.r.text_big(view, "Town Square", (20, 16))
+        self.r.text_small(view, f"Gold: {self.party.gold}", (WIDTH - 140, 20), YELLOW)
         options = [
             "Tavern (Roster)",
             "Form Party (Choose Active)",
@@ -1307,6 +1328,9 @@ class Game:
             for i, (k, v) in enumerate(stats):
                 self.r.text(view, f"{k}:{v:2d}", (32 + (i % 3) * 120, y2 + (i // 3) * 20))
             self.r.text(view, f"HP {temp.max_hp}  MP {temp.mp}", (32, y2 + 44))
+            # Show recruit cost and party gold
+            cost = CLASS_COSTS.get(temp.cls, 0)
+            self.r.text(view, f"Cost: {cost}g    Party Gold: {self.party.gold}", (32, y2 + 66), YELLOW if self.party.gold >= cost else RED)
             self.r.draw_center_menu(["Accept", "Reroll", "Cancel"], self.create_confirm_index)
 
     def create_input(self, event):
@@ -1347,9 +1371,15 @@ class Game:
                         if len(self.party.members) >= ROSTER_MAX:
                             self.log.add("Roster is full.")
                         else:
-                            newc = Character(s["name"], RACES[s["race_ix"]], CLASSES[s["class_ix"]])
-                            self.party.members.append(newc)
-                            self.log.add(f"{newc.name} the {newc.cls} joins the roster.")
+                            cls = CLASSES[s["class_ix"]]
+                            cost = CLASS_COSTS.get(cls, 0)
+                            if self.party.gold < cost:
+                                self.log.add(f"Not enough gold to recruit a {cls}.")
+                            else:
+                                self.party.gold -= cost
+                                newc = Character(s["name"], RACES[s["race_ix"]], cls)
+                                self.party.members.append(newc)
+                                self.log.add(f"{newc.name} the {newc.cls} joins the roster (-{cost}g).")
                         self.mode = MODE_PARTY
                         self.party_mode = 'menu'
                         self.party_actions_index = 0
@@ -1369,6 +1399,7 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
         self.r.text_big(view, "Trader — Buy", (20, 16))
+        self.r.text_small(view, f"Gold: {self.party.gold}", (WIDTH - 140, 20), YELLOW)
         y = 56
         for i, it in enumerate(SHOP_ITEMS):
             prefix = "> " if i == self.shop_index else "  "
@@ -1383,22 +1414,26 @@ class Game:
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.shop_index = (self.shop_index + 1) % len(SHOP_ITEMS)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if not self.party.members:
-                    self.log.add("No one to equip.")
-                    return
-                buyer = self.party.members[0]
                 item = SHOP_ITEMS[self.shop_index]
-                if buyer.gold < item["price"]:
+                if self.party.gold < item["price"]:
                     self.log.add("Not enough gold.")
                     return
-                buyer.gold -= item["price"]
+                self.party.gold -= item["price"]
                 if item["type"] == "consumable":
-                    buyer.inventory.append(item["id"])
+                    self.party.inventory.append(item["id"])
                     self.log.add("Bought a potion.")
                 elif item["type"] == "weapon":
+                    if not self.party.members:
+                        self.log.add("No one to equip.")
+                        return
+                    buyer = self.party.members[0]
                     buyer.equipment.weapon_atk = item["atk"]
                     self.log.add("Equipped a Basic Sword (+2 ATK).")
                 elif item["type"] == "armor":
+                    if not self.party.members:
+                        self.log.add("No one to equip.")
+                        return
+                    buyer = self.party.members[0]
                     buyer.equipment.armor_ac = item["ac"]
                     self.log.add("Equipped Leather Armor (-1 AC).")
             elif event.key == pygame.K_ESCAPE:
@@ -1422,8 +1457,8 @@ class Game:
                     m = self.party.members[ix]
                     if not m.alive:
                         cost = 50
-                        if self.total_gold() >= cost:
-                            self.take_gold(cost)
+                        if self.party.gold >= cost:
+                            self.party.gold -= cost
                             m.alive = True
                             m.hp = max(1, m.max_hp // 2)
                             self.log.add(f"{m.name} is revived.")
@@ -1431,8 +1466,8 @@ class Game:
                             self.log.add("Not enough gold to revive.")
                     else:
                         cost = 10
-                        if self.total_gold() >= cost:
-                            self.take_gold(cost)
+                        if self.party.gold >= cost:
+                            self.party.gold -= cost
                             m.hp = m.max_hp
                             self.log.add(f"{m.name} healed to full.")
                         else:
@@ -1619,7 +1654,7 @@ class Game:
         view.fill((18, 18, 24))
         self.r.text_big(view, "Items", (20, 16))
         if self.items_phase == 'member':
-            self.r.text_small(view, "Choose member (Enter)", (32, 46), LIGHT)
+            self.r.text_small(view, "Choose target (Enter)", (32, 46), LIGHT)
             y = 66
             actives = self.party.active_members()
             for i, m in enumerate(actives):
@@ -1633,11 +1668,11 @@ class Game:
                 self.items_phase = 'member'
                 return
             m = actives[self.items_member_ix % len(actives)]
-            self.r.text(view, f"{m.name}'s items:", (32, 50))
+            self.r.text(view, f"Party items (target: {m.name}):", (32, 50))
             y = 72
-            if not m.inventory:
+            if not self.party.inventory:
                 self.r.text_small(view, "(none)", (40, y), LIGHT)
-            for i, iid in enumerate(m.inventory):
+            for i, iid in enumerate(self.party.inventory):
                 it = ITEMS_BY_ID.get(iid, {"name": iid})
                 prefix = "> " if i == self.items_item_ix else "  "
                 self.r.text(view, f"{prefix}{it['name']}", (32, y), YELLOW if i == self.items_item_ix else WHITE)
@@ -1662,20 +1697,20 @@ class Game:
             else:
                 sel_member = actives[self.items_member_ix % len(actives)] if actives else None
                 if event.key in (pygame.K_UP, pygame.K_k):
-                    if sel_member and sel_member.inventory:
-                        self.items_item_ix = (self.items_item_ix - 1) % len(sel_member.inventory)
+                    if self.party.inventory:
+                        self.items_item_ix = (self.items_item_ix - 1) % len(self.party.inventory)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    if sel_member and sel_member.inventory:
-                        self.items_item_ix = (self.items_item_ix + 1) % len(sel_member.inventory)
+                    if self.party.inventory:
+                        self.items_item_ix = (self.items_item_ix + 1) % len(self.party.inventory)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if sel_member and sel_member.inventory:
-                        iid = sel_member.inventory[self.items_item_ix]
+                    if sel_member and self.party.inventory:
+                        iid = self.party.inventory[self.items_item_ix]
                         self.use_item(sel_member, iid)
                         it = ITEMS_BY_ID.get(iid, {})
                         if it.get("type") == "consumable":
-                            sel_member.inventory.pop(self.items_item_ix)
-                            if self.items_item_ix >= len(sel_member.inventory):
-                                self.items_item_ix = max(0, len(sel_member.inventory) - 1)
+                            self.party.inventory.pop(self.items_item_ix)
+                            if self.items_item_ix >= len(self.party.inventory):
+                                self.items_item_ix = max(0, len(self.party.inventory) - 1)
                 elif event.key == pygame.K_ESCAPE:
                     self.items_phase = 'member'
 
@@ -1860,11 +1895,12 @@ class Game:
 
     # --------------- Gold helpers ---------------
     def total_gold(self) -> int:
-        return sum(m.gold for m in self.party.members)
+        # Kept for compatibility; now reflects party gold
+        return self.party.gold
 
     def take_gold(self, amount: int):
-        if self.party.members:
-            self.party.members[0].gold = max(0, self.party.members[0].gold - amount)
+        # Kept for compatibility; subtracts from party gold
+        self.party.gold = max(0, self.party.gold - amount)
 
     # --------------- Main loop ---------------
     def update(self):
