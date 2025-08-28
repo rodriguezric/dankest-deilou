@@ -461,14 +461,18 @@ class Renderer:
             rects[gi] = rect
         return rects
 
-    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None) -> Dict[int, pygame.Rect]:
+    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None, dying: Dict[int, float] = None) -> Dict[int, pygame.Rect]:
         highlight = highlight or set()
         acting = acting or set()
+        dying = dying or {}
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         alive = [(i, e) for i, e in enumerate(enemies) if e.hp > 0]
-        if not alive:
+        # include dying entries for fade-out
+        extra = [(i, enemies[i]) for i in dying.keys() if 0 <= i < len(enemies) and enemies[i].hp <= 0]
+        draw_list = alive + [x for x in extra if x[0] not in [i for i, _ in alive]]
+        if not draw_list:
             return {}
-        n = len(alive)
+        n = len(draw_list)
         gap = 16
         w = min(220, (WIDTH - gap * (n + 1)) // n)
         h = 60
@@ -476,7 +480,7 @@ class Renderer:
         x = (WIDTH - total) // 2 + gap
         y = 16
         rects: Dict[int, pygame.Rect] = {}
-        for j, (i, e) in enumerate(alive):
+        for j, (i, e) in enumerate(draw_list):
             (ox, oy), hit_color = effects.sample("enemy", i, base_color=WHITE)
             border_col = hit_color
             if border_col == WHITE:
@@ -488,11 +492,24 @@ class Renderer:
             rx = x + j * (w + gap) + ox
             ry = y + oy
             rect = pygame.Rect(rx, ry, w, h)
-            pygame.draw.rect(view, (20, 20, 28), rect)
-            pygame.draw.rect(view, border_col, rect, 2)
-            name = e.name[:14]
-            self.text(view, name, (rx + 8, ry + 6), border_col)
-            self.text_small(view, f"HP {max(0,e.hp):>2}", (rx + 8, ry + 26), WHITE)
+            # draw to a temp surface if fading
+            fade_p = dying.get(i, 0.0)
+            if fade_p > 0:
+                alpha = max(0, min(255, int(255 * (1.0 - fade_p))))
+                temp = pygame.Surface((w, h), pygame.SRCALPHA)
+                pygame.draw.rect(temp, (20, 20, 28), temp.get_rect())
+                pygame.draw.rect(temp, border_col, temp.get_rect(), 2)
+                name = e.name[:14]
+                temp.blit(self.font.render(name, True, border_col), (8, 6))
+                temp.blit(self.font_small.render(f"HP {max(0,e.hp):>2}", True, WHITE), (8, 26))
+                temp.set_alpha(alpha)
+                view.blit(temp, (rx, ry))
+            else:
+                pygame.draw.rect(view, (20, 20, 28), rect)
+                pygame.draw.rect(view, border_col, rect, 2)
+                name = e.name[:14]
+                self.text(view, name, (rx + 8, ry + 6), border_col)
+                self.text_small(view, f"HP {max(0,e.hp):>2}", (rx + 8, ry + 26), WHITE)
             rects[i] = rect
         return rects
 
@@ -501,9 +518,45 @@ class Renderer:
 class MessageLog:
     def __init__(self):
         self.lines: List[str] = ["Welcome to the Labyrinth of Trials."]
+        self._queue: List[str] = []
+        self._current: str = ""
+        self._reveal_chars: int = 0
+        self._last_tick: int = pygame.time.get_ticks()
+        # chars per second; tune for comfortable reading
+        self._cps: float = 90.0
 
     def add(self, txt: str):
-        self.lines.append(txt)
+        # queue text to be revealed with typewriter effect
+        self._queue.append(txt)
+
+    def _advance_queue(self):
+        if not self._current and self._queue:
+            self._current = self._queue.pop(0)
+            self._reveal_chars = 0
+
+    def update(self):
+        # progress typewriter reveal
+        now = pygame.time.get_ticks()
+        dt = max(0, now - self._last_tick)
+        self._last_tick = now
+        self._advance_queue()
+        if self._current:
+            add_chars = int(self._cps * (dt / 1000.0))
+            if add_chars > 0:
+                self._reveal_chars = min(len(self._current), self._reveal_chars + add_chars)
+                if self._reveal_chars >= len(self._current):
+                    # push finished line into history, reset current
+                    self.lines.append(self._current)
+                    self._current = ""
+                    self._reveal_chars = 0
+                    # small delay before next line begins revealing
+                    # by leaving update until next frame to pull from queue
+
+    def render_lines(self) -> List[str]:
+        # return lines including partially revealed current line (if any)
+        if self._current and self._reveal_chars > 0:
+            return self.lines + [self._current[: self._reveal_chars]]
+        return self.lines
 
 
 # ------------------------------ Battle -------------------------------------
@@ -518,10 +571,12 @@ class Battle:
         self.result: Optional[str] = None
 
         # UI/flow
-        self.state: str = 'menu'  # 'menu' | 'target' | 'anim' | 'postpause'
+        self.state: str = 'menu'  # 'menu' | 'skillmenu' | 'target' | 'anim' | 'postpause'
         self.ui_menu_open: bool = True
         self.ui_menu_index: int = 0
         self.ui_menu_options: List[Tuple[str, str]] = []  # (id,label)
+        self.skill_menu_index: int = 0
+        self.skill_options: List[Tuple[str, str]] = []  # per-actor skills
         self.anim: Optional[Dict[str, Any]] = None
         self.enemy_queue: List[Dict[str, Any]] = []
         self.floaters: List[Dict[str, Any]] = []  # {side:'party'|'enemy', index:int, text:str, start:int, dur:int}
@@ -531,6 +586,11 @@ class Battle:
 
         # Target selection
         self.target_menu_index: int = 0
+        self.target_mode: Optional[Dict[str, Any]] = None  # {'side': 'enemy'|'party', 'action': 'attack'|'spell'|'heal'}
+
+        # Defeat animations
+        self.dying_enemies: Dict[int, Dict[str, int]] = {}  # i -> {'start':ms,'dur':ms}
+        self.downed_party: Dict[int, Dict[str, int]] = {}   # gi -> {'start':ms,'dur':ms}
 
     def start_random(self):
         count = random.randint(1, 3)
@@ -571,12 +631,25 @@ class Battle:
         a = self.current_actor()
         if not a:
             self.finish_defeat(); return
+        # Main menu
         self.ui_menu_options.append(('attack', 'Attack'))
-        if a.cls == 'Mage' and a.mp > 0:
-            self.ui_menu_options.append(('spell', 'Spell'))
-        if a.cls == 'Priest' and a.mp > 0:
-            self.ui_menu_options.append(('heal', 'Heal'))
+        self.ui_menu_options.append(('skill', 'Skill'))
         self.ui_menu_options.append(('run', 'Run'))
+        # Build skills list for current actor
+        skills: List[Tuple[str, str]] = []
+        if a.cls == 'Mage':
+            skills.append(('spell', 'Spark'))
+        if a.cls == 'Priest':
+            skills.append(('heal', 'Heal'))
+        # Could add more per-class skills here later
+        # Filter by resource availability (e.g., MP > 0)
+        filt: List[Tuple[str, str]] = []
+        for sid, label in skills:
+            if sid in ('spell', 'heal') and a.mp <= 0:
+                continue
+            filt.append((sid, label))
+        self.skill_options = filt
+        self.skill_menu_index = 0
 
     def queue_enemy_round(self):
         self.enemy_queue = []
@@ -610,6 +683,9 @@ class Battle:
         now = pygame.time.get_ticks()
         # prune floaters
         self.floaters = [f for f in self.floaters if now - f['start'] < f['dur']]
+        # prune finished defeat animations
+        self.dying_enemies = {i: d for i, d in self.dying_enemies.items() if now - d['start'] < d['dur']}
+        self.downed_party = {i: d for i, d in self.downed_party.items() if now - d['start'] < d['dur']}
         if self.battle_over:
             return
         if self.state == 'anim' and self.anim:
@@ -662,6 +738,10 @@ class Battle:
                     if 0 <= i < len(self.enemies):
                         self.enemies[i].hp -= dmg
                         self.effects.trigger('enemy', i, 300, 7)
+                        if self.enemies[i].hp <= 0:
+                            self.enemies[i].hp = 0
+                            # start defeat animation
+                            self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
                 else:
                     gi = act['target_index']
                     if 0 <= gi < len(self.party.members):
@@ -670,6 +750,8 @@ class Battle:
                         if t.hp <= 0:
                             t.hp = 0
                             t.alive = False
+                            # animate a brief downed effect
+                            self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
                         self.effects.trigger('party', gi, 300, 7)
                 self.log.add(act.get('label', 'A hit lands.'))
             else:
@@ -703,6 +785,11 @@ class Battle:
         return False
 
     def finish_victory(self):
+        # If any defeat animations are still running, delay victory finalize
+        if self.dying_enemies:
+            # try again after animations complete
+            self.next_after_anim = {'actor_side': 'enemy'}  # dummy to keep loop flowing
+            return
         total_exp = random.randint(20, 60)
         total_gold = random.randint(10, 40)
         alive = self.party.alive_active_members()
@@ -737,10 +824,11 @@ class Battle:
             'miss_label': f"{actor.name} misses {e.name}.",
         }
 
-    def make_spell_action(self, actor: Character) -> Optional[Dict[str, Any]]:
+    def make_spell_action(self, actor: Character, target_i: Optional[int] = None) -> Optional[Dict[str, Any]]:
         if actor.cls != 'Mage' or actor.mp <= 0:
             return None
-        target_i = next((i for i, e in enumerate(self.enemies) if e.hp > 0), None)
+        if target_i is None:
+            target_i = next((i for i, e in enumerate(self.enemies) if e.hp > 0), None)
         if target_i is None:
             return None
         actor.mp -= 1
@@ -754,19 +842,20 @@ class Battle:
             'label': f"{actor.name} casts Spark for {dmg}!",
         }
 
-    def make_heal_action(self, actor: Character) -> Optional[Dict[str, Any]]:
+    def make_heal_action(self, actor: Character, target_gi: Optional[int] = None) -> Optional[Dict[str, Any]]:
         if actor.cls != 'Priest' or actor.mp <= 0:
             return None
-        target = min((m for m in self.party.active_members() if m.alive), key=lambda c: c.hp / max(1, c.max_hp), default=None)
-        if not target:
-            return None
+        if target_gi is None:
+            target = min((m for m in self.party.active_members() if m.alive), key=lambda c: c.hp / max(1, c.max_hp), default=None)
+            if not target:
+                return None
+            target_gi = self.party.members.index(target)
         actor.mp -= 1
         amt = max(1, random.randint(6, 10) + ability_mod(actor.piety))
         gi = self.party.members.index(actor)
-        ti = self.party.members.index(target)
         return {
             'type': 'heal', 'actor_side': 'party', 'actor_index': gi,
-            'target_side': 'party', 'target_index': ti,
+            'target_side': 'party', 'target_index': target_gi,
             'heal': amt, 'actor_name': actor.name,
         }
 
@@ -1616,37 +1705,89 @@ class Game:
                     actor = b.current_actor()
                     if chosen_id == 'attack':
                         b.state = 'target'
+                        b.target_mode = {'side': 'enemy', 'action': 'attack'}
                         alive_enemy_indices = [i for i, e in enumerate(b.enemies) if e.hp > 0]
                         b.target_menu_index = 0
                         if not alive_enemy_indices:
                             b.begin_player_turn()
-                    elif chosen_id == 'spell':
-                        act = b.make_spell_action(actor)
-                        if act:
-                            b.start_animation(act)
-                    elif chosen_id == 'heal':
-                        act = b.make_heal_action(actor)
-                        if act:
-                            b.start_animation(act)
+                    elif chosen_id == 'skill':
+                        # open skill submenu
+                        b.state = 'skillmenu'
+                        b.skill_menu_index = 0
                     elif chosen_id == 'run':
                         act = b.make_run_action()
                         b.start_animation(act)
-            elif b.state == 'target':
-                alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
-                if not alive:
-                    b.begin_player_turn(); return
+            elif b.state == 'skillmenu':
+                # show per-actor skills and Back
+                n = max(1, len(b.skill_options) + 1)
                 if event.key in (pygame.K_UP, pygame.K_k):
-                    b.target_menu_index = (b.target_menu_index - 1) % len(alive)
+                    b.skill_menu_index = (b.skill_menu_index - 1) % n
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    b.target_menu_index = (b.target_menu_index + 1) % len(alive)
+                    b.skill_menu_index = (b.skill_menu_index + 1) % n
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    actor = b.current_actor()
-                    target_i = alive[b.target_menu_index]
-                    act = b.make_attack_action(actor, target_i)
-                    if act:
-                        b.start_animation(act)
+                    if b.skill_menu_index == len(b.skill_options):
+                        # Back
+                        b.state = 'menu'
+                    else:
+                        sid, _ = b.skill_options[b.skill_menu_index]
+                        actor = b.current_actor()
+                        if sid == 'spell':
+                            # choose enemy target
+                            b.state = 'target'
+                            b.target_mode = {'side': 'enemy', 'action': 'spell'}
+                            b.target_menu_index = 0
+                        elif sid == 'heal':
+                            # choose party target
+                            b.state = 'target'
+                            b.target_mode = {'side': 'party', 'action': 'heal'}
+                            b.target_menu_index = 0
                 elif event.key == pygame.K_ESCAPE:
-                    b.begin_player_turn()
+                    b.state = 'menu'
+            elif b.state == 'target':
+                # choose from enemies or party based on target_mode
+                if not b.target_mode:
+                    b.begin_player_turn(); return
+                if b.target_mode['side'] == 'enemy':
+                    alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                    if not alive:
+                        b.begin_player_turn(); return
+                    if event.key in (pygame.K_UP, pygame.K_k):
+                        b.target_menu_index = (b.target_menu_index - 1) % len(alive)
+                    elif event.key in (pygame.K_DOWN, pygame.K_j):
+                        b.target_menu_index = (b.target_menu_index + 1) % len(alive)
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        actor = b.current_actor()
+                        target_i = alive[b.target_menu_index]
+                        if b.target_mode.get('action') == 'attack':
+                            act = b.make_attack_action(actor, target_i)
+                        else:
+                            act = b.make_spell_action(actor, target_i)
+                        if act:
+                            b.start_animation(act)
+                    elif event.key == pygame.K_ESCAPE:
+                        # go back to appropriate previous menu
+                        if b.target_mode.get('action') == 'attack':
+                            b.state = 'menu'
+                        else:
+                            b.state = 'skillmenu'
+                else:
+                    # party targeting (for heal)
+                    alive_gi = [i for i, m in enumerate(self.party.members) if m.alive and m.hp > 0 and i in self.party.active]
+                    if not alive_gi:
+                        b.begin_player_turn(); return
+                    if event.key in (pygame.K_UP, pygame.K_k):
+                        b.target_menu_index = (b.target_menu_index - 1) % len(alive_gi)
+                    elif event.key in (pygame.K_DOWN, pygame.K_j):
+                        b.target_menu_index = (b.target_menu_index + 1) % len(alive_gi)
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        actor = b.current_actor()
+                        target_gi = alive_gi[b.target_menu_index]
+                        act = b.make_heal_action(actor, target_gi)
+                        if act:
+                            b.start_animation(act)
+                    elif event.key == pygame.K_ESCAPE:
+                        b.state = 'skillmenu'
+            
 
     def draw_battle(self):
         b = self.in_battle
@@ -1663,23 +1804,42 @@ class Game:
                 if gi is not None:
                     party_highlight.add(gi)
             if b.state == 'target':
-                alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
-                if alive:
-                    enemy_highlight.add(alive[b.target_menu_index])
+                if b.target_mode and b.target_mode.get('side') == 'party':
+                    alive_gi = [i for i, m in enumerate(self.party.members) if m.alive and m.hp > 0 and i in self.party.active]
+                    if alive_gi:
+                        party_highlight.add(alive_gi[b.target_menu_index])
+                else:
+                    alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                    if alive:
+                        enemy_highlight.add(alive[b.target_menu_index])
             if b.state == 'anim' and b.anim:
                 act = b.anim['action']
                 if act['actor_side'] == 'party' and act['actor_index'] is not None:
                     party_acting.add(act['actor_index'])
                 elif act['actor_side'] == 'enemy':
                     enemy_acting.add(act['actor_index'])
-        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting) if b else {}
+        # dying enemies fade-out progress
+        dying_prog: Dict[int, float] = {}
+        if b:
+            now = pygame.time.get_ticks()
+            for i, d in b.dying_enemies.items():
+                p = max(0.0, min(1.0, (now - d['start']) / max(1, d['dur'])))
+                dying_prog[i] = p
+        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog) if b else {}
         party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting)
         if b:
             if b.state == 'menu':
                 self.r.draw_center_menu([label for _id, label in b.ui_menu_options], b.ui_menu_index)
                 self.r.text_small(view, "^/v Select  Enter Confirm", (40, VIEW_H - 100), LIGHT)
+            elif b.state == 'skillmenu':
+                opts = [label for _id, label in b.skill_options] or ["(No skills)"]
+                opts = opts + ["Back"]
+                self.r.draw_center_menu(opts, b.skill_menu_index)
             elif b.state == 'target':
-                options = [b.enemies[i].name for i in range(len(b.enemies)) if b.enemies[i].hp > 0] or ["(no targets)"]
+                if b.target_mode and b.target_mode.get('side') == 'party':
+                    options = [self.party.members[i].name for i in range(len(self.party.members)) if self.party.members[i].alive and self.party.members[i].hp > 0 and i in self.party.active] or ["(no targets)"]
+                else:
+                    options = [b.enemies[i].name for i in range(len(b.enemies)) if b.enemies[i].hp > 0] or ["(no targets)"]
                 self.r.draw_center_menu(options + ["Back"], b.target_menu_index if options else 0)
         now = pygame.time.get_ticks()
         for f in (b.floaters if b else []):
@@ -1708,6 +1868,8 @@ class Game:
 
     # --------------- Main loop ---------------
     def update(self):
+        # progress typewriter for message log every frame
+        self.log.update()
         if self.mode == MODE_BATTLE and self.in_battle:
             self.in_battle.update()
             if self.in_battle.battle_over:
@@ -1787,8 +1949,8 @@ class Game:
                 elif self.mode == MODE_BATTLE:
                     self.draw_battle()
 
-                # Draw message log for non-title scenes
-                self.r.draw_log(self.log.lines)
+                # Draw message log for non-title scenes (with typewriter effect)
+                self.r.draw_log(self.log.render_lines())
             pygame.display.flip()
 
         pygame.quit()
