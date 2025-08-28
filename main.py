@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
 """
-Wizardry‑style dungeon RPG — single‑file Pygame prototype (Top‑down, 4‑party, Pause Menu, Levels)
+Wizardry‑style dungeon RPG — single‑file Pygame prototype (Top‑down, 4‑party, Menus, Animations)
 
-Updates in this version
-- Removed wireframe view (top‑down only) and the right‑side status panel
-- Max **active party** size is now **4**; choose actives from Town (Form Party)
-- Town options include **Status** screen and **Form Party (choose Active)**
-- Labyrinth: victory/flee returns to the maze at the same position
-- No random encounters when stepping onto **Stairs** or **Town** tiles
-- Pause menu in labyrinth (press **Esc**): **Status / Items / Close**
-  - **Status** shows the same party status screen; closing returns to the pause menu
-  - **Items** lists active members' inventories; use items (e.g., potions) here; closing returns to the pause menu
-  - **Close** resumes the labyrinth
-- Multi‑level dungeon persists: Town node (blue), Stairs Down (yellow △), Stairs Up (green ▽)
-- Local font: uses `fonts/prstart.ttf` with system fallback
+Update summary
+- Centered menus now have **no headers** (cleaner look).
+- Tavern actions are **Create / Dismiss / Back** and the menu opens **automatically**.
+- **Back** in Tavern returns to **Town**.
+- **Dismiss** now lets you choose a character and confirms via a popup.
+- (Kept from prior) Target selection in battle, inter‑animation pauses, acting highlights, enemy windows, etc.
 
 Controls
-- Menus: Arrow keys / number keys / Enter / Esc
+- Menus: Arrow keys / Enter / Esc
 - Maze: ←/→ turn, ↑ move, Esc pause menu
-- Battle: A Attack, S Spell (Mage), H Heal (Priest), R Run
 
 Tested with: Python 3.10+, pygame 2.5+
 """
@@ -54,24 +47,24 @@ PURPLE = (180, 120, 240)
 # Modes
 MODE_TOWN = "TOWN"
 MODE_CREATE = "CREATE"
-MODE_PARTY = "PARTY"       # roster management
-MODE_FORM = "FORM"         # choose active party (max 4)
-MODE_STATUS = "STATUS"     # view status screen
+MODE_PARTY = "PARTY"
+MODE_FORM = "FORM"
+MODE_STATUS = "STATUS"
 MODE_SHOP = "SHOP"
 MODE_TEMPLE = "TEMPLE"
 MODE_TRAINING = "TRAINING"
 MODE_MAZE = "MAZE"
 MODE_BATTLE = "BATTLE"
 MODE_SAVELOAD = "SAVELOAD"
-MODE_PAUSE = "PAUSE"       # pause menu in maze
-MODE_ITEMS = "ITEMS"       # item use screen from pause
+MODE_PAUSE = "PAUSE"
+MODE_ITEMS = "ITEMS"
 
 # Map tiles
 T_EMPTY = 0
 T_WALL = 1
-T_TOWN = 2      # node returns to town
-T_STAIRS_D = 3  # stairs down
-T_STAIRS_U = 4  # stairs up
+T_TOWN = 2
+T_STAIRS_D = 3
+T_STAIRS_U = 4
 
 # Limits
 ACTIVE_MAX = 4
@@ -83,7 +76,7 @@ CLASSES = ["Fighter", "Mage", "Priest", "Thief"]
 
 BASE_HP = {"Fighter": 12, "Mage": 6, "Priest": 8, "Thief": 8}
 BASE_MP = {"Fighter": 0, "Mage": 8, "Priest": 6, "Thief": 0}
-AC_BASE = 10  # lower is better
+AC_BASE = 10
 
 ENEMY_TABLE = [
     {"name": "Giant Rat", "hp": (6, 10), "ac": 8, "atk": (1, 4), "exp": 12, "gold": (1, 8)},
@@ -99,12 +92,12 @@ SHOP_ITEMS = [
 ]
 ITEMS_BY_ID = {it["id"]: it for it in SHOP_ITEMS}
 
-DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]  # N E S W
+DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 DIR_NAMES = ["N", "E", "S", "W"]
 
 
 def roll_stat():
-    return sum(random.randint(1, 6) for _ in range(3))  # 3d6 classic
+    return sum(random.randint(1, 6) for _ in range(3))
 
 
 def ability_mod(score: int) -> int:
@@ -162,7 +155,7 @@ class Character:
 
     @staticmethod
     def from_dict(d):
-        c = Character(d["name"], d["race"], d["cls"])  # will roll stats but overwrite
+        c = Character(d["name"], d["race"], d["cls"])
         for k, v in d.items():
             if k == "equipment":
                 c.equipment = Equipment(**v)
@@ -174,13 +167,11 @@ class Character:
 class Party:
     def __init__(self):
         self.members: List[Character] = []
-        self.active: List[int] = []  # indices into members
+        self.active: List[int] = []
 
-    # Roster helpers
     def alive_members(self) -> List[Character]:
         return [c for c in self.members if c.alive and c.hp > 0]
 
-    # Active helpers
     def active_members(self) -> List[Character]:
         return [self.members[i] for i in self.active if 0 <= i < len(self.members)]
 
@@ -306,7 +297,7 @@ class Dungeon:
         return random.choice(candidates) if candidates else (2, 2)
 
 
-# ------------------------------ Hit Effects --------------------------------
+# ------------------------------ Hit/FX --------------------------------------
 class HitEffects:
     def __init__(self):
         self.effects: Dict[Tuple[str, int], Dict[str, Any]] = {}
@@ -349,8 +340,8 @@ class Renderer:
 
     def draw_frame(self):
         self.screen.fill(DARK)
-        pygame.draw.rect(self.screen, (30, 30, 34), (0, 0, WIDTH, VIEW_H))  # view
-        pygame.draw.rect(self.screen, (28, 28, 32), (0, VIEW_H, WIDTH, LOG_H))  # log
+        pygame.draw.rect(self.screen, (30, 30, 34), (0, 0, WIDTH, VIEW_H))
+        pygame.draw.rect(self.screen, (28, 28, 32), (0, VIEW_H, WIDTH, LOG_H))
 
     def text(self, surf, txt, pos, color=WHITE, aa=True):
         surf.blit(self.font.render(txt, aa, color), pos)
@@ -368,14 +359,19 @@ class Renderer:
             self.text_small(panel, ln, (10, y))
             y += 14
 
-    # ---- Top‑down ----
+    # ---- Top‑down centered & larger ----
     def draw_topdown(self, grid, pos: Tuple[int, int], facing: int, level_ix: int):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 22))
-        cell = 18
-        ox, oy = 20, 20
         px, py = pos
         radius = 10
+        visible = radius * 2 + 1
+        margin = 40
+        cell = min((WIDTH - margin * 2) // visible, (VIEW_H - margin * 2) // visible)
+        total_w = visible * cell
+        total_h = visible * cell
+        ox = (WIDTH - total_w) // 2
+        oy = (VIEW_H - total_h) // 2
         for y in range(py - radius, py + radius + 1):
             for x in range(px - radius, px + radius + 1):
                 sx = ox + (x - (px - radius)) * cell
@@ -387,18 +383,117 @@ class Renderer:
                     else:
                         pygame.draw.rect(view, (24, 24, 34), (sx, sy, cell - 1, cell - 1))
                         if t == T_TOWN:
-                            pygame.draw.circle(view, BLUE, (sx + cell // 2, sy + cell // 2), 4)
+                            pygame.draw.circle(view, BLUE, (sx + cell // 2, sy + cell // 2), max(3, cell // 6))
                         elif t == T_STAIRS_D:
-                            pygame.draw.polygon(view, YELLOW, [(sx + 4, sy + 4), (sx + cell - 4, sy + 4), (sx + cell // 2, sy + cell - 4)])
+                            pygame.draw.polygon(view, YELLOW, [(sx + cell // 5, sy + cell // 5), (sx + cell - cell // 5, sy + cell // 5), (sx + cell // 2, sy + cell - cell // 5)])
                         elif t == T_STAIRS_U:
-                            pygame.draw.polygon(view, GREEN, [(sx + 4, sy + cell - 4), (sx + cell - 4, sy + cell - 4), (sx + cell // 2, sy + 4)])
-        # player
+                            pygame.draw.polygon(view, GREEN, [(sx + cell // 5, sy + cell - cell // 5), (sx + cell - cell // 5, sy + cell - cell // 5), (sx + cell // 2, sy + cell // 5)])
+        # player marker
         pxs = ox + radius * cell + cell // 2
         pys = oy + radius * cell + cell // 2
-        pygame.draw.circle(view, PURPLE, (pxs, pys), 6)
+        pygame.draw.circle(view, PURPLE, (pxs, pys), max(4, cell // 4))
         d = DIRS[facing]
-        pygame.draw.line(view, PURPLE, (pxs, pys), (pxs + d[0] * 12, pys + d[1] * 12), 2)
+        pygame.draw.line(view, PURPLE, (pxs, pys), (pxs + d[0] * max(10, cell // 2), pys + d[1] * max(10, cell // 2)), 2)
         self.text_small(view, f"L{level_ix} pos {pos} {DIR_NAMES[facing]}", (12, 6))
+
+    # ---- Generic centered menu (no header) ----
+    def draw_center_menu(self, options: List[str], selected: int = 0):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        if not options:
+            return
+        pad_x, pad_y = 24, 12
+        text_w = max(self.font.size(s)[0] for s in options)
+        text_h = self.font.get_height()
+        min_w = 360
+        w = max(text_w + pad_x * 2, min_w)
+        h = text_h * len(options) + pad_y * 2
+        x = WIDTH // 2 - w // 2
+        y = VIEW_H // 2 - h // 2
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(view, (16, 16, 20), rect)
+        pygame.draw.rect(view, YELLOW, rect, 2)
+        cy = y + pad_y
+        for i, s in enumerate(options):
+            color = YELLOW if i == selected else WHITE
+            prefix = "> " if i == selected else "  "
+            self.text(view, prefix + s, (x + pad_x, cy), color)
+            cy += text_h
+
+    # ---- Combat HUDs ----
+    def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None) -> Dict[int, pygame.Rect]:
+        highlight = highlight or set()
+        acting = acting or set()
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        members = party.active_members()
+        if not members:
+            return {}
+        n = len(members)
+        gap = 16
+        w = min(220, (WIDTH - gap * (n + 1)) // n)
+        h = 60
+        total = n * w + (n + 1) * gap
+        x = (WIDTH - total) // 2 + gap
+        y = VIEW_H - h - 16
+        rects: Dict[int, pygame.Rect] = {}
+        for i, m in enumerate(members):
+            try:
+                gi = party.members.index(m)
+            except ValueError:
+                gi = i
+            (ox, oy), hit_color = effects.sample("party", gi, base_color=WHITE)
+            border_col = hit_color
+            if border_col == WHITE:
+                now = pygame.time.get_ticks()
+                if gi in acting and (now // 120) % 2 == 0:
+                    border_col = YELLOW
+                elif gi in highlight:
+                    border_col = YELLOW
+            rx = x + i * (w + gap) + ox
+            ry = y + oy
+            rect = pygame.Rect(rx, ry, w, h)
+            pygame.draw.rect(view, (20, 20, 28), rect)
+            pygame.draw.rect(view, border_col, rect, 2)
+            name = m.name[:14]
+            self.text(view, name, (rx + 8, ry + 6), border_col)
+            self.text_small(view, f"HP {m.hp}/{m.max_hp}", (rx + 8, ry + 26), WHITE)
+            self.text_small(view, f"MP {m.mp}/{m.max_mp}", (rx + w // 2 + 8, ry + 26), WHITE)
+            rects[gi] = rect
+        return rects
+
+    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None) -> Dict[int, pygame.Rect]:
+        highlight = highlight or set()
+        acting = acting or set()
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        alive = [(i, e) for i, e in enumerate(enemies) if e.hp > 0]
+        if not alive:
+            return {}
+        n = len(alive)
+        gap = 16
+        w = min(220, (WIDTH - gap * (n + 1)) // n)
+        h = 60
+        total = n * w + (n + 1) * gap
+        x = (WIDTH - total) // 2 + gap
+        y = 16
+        rects: Dict[int, pygame.Rect] = {}
+        for j, (i, e) in enumerate(alive):
+            (ox, oy), hit_color = effects.sample("enemy", i, base_color=WHITE)
+            border_col = hit_color
+            if border_col == WHITE:
+                now = pygame.time.get_ticks()
+                if i in acting and (now // 120) % 2 == 0:
+                    border_col = YELLOW
+                elif i in highlight:
+                    border_col = YELLOW
+            rx = x + j * (w + gap) + ox
+            ry = y + oy
+            rect = pygame.Rect(rx, ry, w, h)
+            pygame.draw.rect(view, (20, 20, 28), rect)
+            pygame.draw.rect(view, border_col, rect, 2)
+            name = e.name[:14]
+            self.text(view, name, (rx + 8, ry + 6), border_col)
+            self.text_small(view, f"HP {max(0,e.hp):>2}", (rx + 8, ry + 26), WHITE)
+            rects[i] = rect
+        return rects
 
 
 # ------------------------------ Message Log --------------------------------
@@ -419,13 +514,29 @@ class Battle:
         self.enemies: List[Enemy] = []
         self.turn_index = 0
         self.battle_over = False
-        self.result: Optional[str] = None  # 'victory' | 'defeat' | 'fled'
+        self.result: Optional[str] = None
+
+        # UI/flow
+        self.state: str = 'menu'  # 'menu' | 'target' | 'anim' | 'postpause'
+        self.ui_menu_open: bool = True
+        self.ui_menu_index: int = 0
+        self.ui_menu_options: List[Tuple[str, str]] = []  # (id,label)
+        self.anim: Optional[Dict[str, Any]] = None
+        self.enemy_queue: List[Dict[str, Any]] = []
+        self.floaters: List[Dict[str, Any]] = []  # {side:'party'|'enemy', index:int, text:str, start:int, dur:int}
+        self.pause_between_ms: int = 180
+        self.pause_until: int = 0
+        self.next_after_anim: Optional[Dict[str, Any]] = None
+
+        # Target selection
+        self.target_menu_index: int = 0
 
     def start_random(self):
         count = random.randint(1, 3)
         self.enemies = [Enemy.random_enemy() for _ in range(count)]
         self.log.add(f"Ambushed by {', '.join(e.name for e in self.enemies)}!")
         self.turn_index = 0
+        self.begin_player_turn()
 
     def current_actor(self) -> Optional[Character]:
         alive = self.party.alive_active_members()
@@ -435,104 +546,233 @@ class Battle:
             self.turn_index = 0
         return alive[self.turn_index]
 
+    def current_actor_global_ix(self) -> Optional[int]:
+        actor = self.current_actor()
+        if not actor:
+            return None
+        try:
+            return self.party.members.index(actor)
+        except ValueError:
+            return None
+
     def enemy_alive(self) -> bool:
         return any(e.hp > 0 for e in self.enemies)
 
-    def step_enemies(self):
-        for e in self.enemies:
+    # ---- Turn flow ----
+    def begin_player_turn(self):
+        if not self.enemy_alive():
+            self.finish_victory(); return
+        if not self.party.any_active_alive():
+            self.finish_defeat(); return
+        self.state = 'menu'
+        self.ui_menu_index = 0
+        self.ui_menu_options = []
+        a = self.current_actor()
+        if not a:
+            self.finish_defeat(); return
+        self.ui_menu_options.append(('attack', 'Attack'))
+        if a.cls == 'Mage' and a.mp > 0:
+            self.ui_menu_options.append(('spell', 'Spell'))
+        if a.cls == 'Priest' and a.mp > 0:
+            self.ui_menu_options.append(('heal', 'Heal'))
+        self.ui_menu_options.append(('run', 'Run'))
+
+    def queue_enemy_round(self):
+        self.enemy_queue = []
+        for i, e in enumerate(self.enemies):
             if e.hp <= 0:
                 continue
             targets = self.party.alive_active_members()
             if not targets:
                 break
             t = random.choice(targets)
-            dmg = random.randint(e.atk_low, e.atk_high)
+            gi = self.party.members.index(t)
             hit = random.random() < 0.65
-            if hit:
-                t.hp -= dmg
-                if t.hp <= 0:
-                    t.hp = 0
-                    t.alive = False
-                    self.log.add(f"{e.name} hits {t.name} for {dmg}. {t.name} is down!")
-                else:
-                    self.log.add(f"{e.name} hits {t.name} for {dmg}.")
-                # optional: party shake effect (not visible without panel)
-            else:
-                self.log.add(f"{e.name} misses {t.name}.")
+            dmg = random.randint(e.atk_low, e.atk_high)
+            self.enemy_queue.append({
+                'type': 'attack',
+                'actor_side': 'enemy', 'actor_index': i,
+                'target_side': 'party', 'target_index': gi,
+                'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                'miss_label': f"{e.name} misses {t.name}.",
+            })
 
-    def end_round_and_check(self) -> bool:
-        self.enemies = [e for e in self.enemies if e.hp > 0]
+    def start_animation(self, action: Dict[str, Any]):
+        now = pygame.time.get_ticks()
+        self.anim = {'action': action, 'stage': 0, 't0': now, 'dur': [220, 240, 160]}
+        self.state = 'anim'
+
+    def add_floater(self, side: str, index: int, text: str, dur: int = 700):
+        self.floaters.append({'side': side, 'index': index, 'text': text, 'start': pygame.time.get_ticks(), 'dur': dur})
+
+    def update(self):
+        now = pygame.time.get_ticks()
+        # prune floaters
+        self.floaters = [f for f in self.floaters if now - f['start'] < f['dur']]
+        if self.battle_over:
+            return
+        if self.state == 'anim' and self.anim:
+            a = self.anim
+            stage = a['stage']
+            t = now - a['t0']
+            wind, impact, recover = a['dur']
+            act = a['action']
+            if stage == 0 and t >= wind:
+                a['stage'] = 1
+                a['t0'] = now
+                self.resolve_action_impact(act)
+            elif stage == 1 and t >= impact:
+                a['stage'] = 2
+                a['t0'] = now
+            elif stage == 2 and t >= recover:
+                # finish anim -> small pause, then continue
+                self.anim = None
+                self.next_after_anim = {'actor_side': act['actor_side'], 'type': act.get('type'), 'run_success': act.get('success', False)}
+                self.pause_until = now + self.pause_between_ms
+                self.state = 'postpause'
+        elif self.state == 'postpause' and now >= self.pause_until:
+            if self.check_end_and_maybe_finish():
+                return
+            na = self.next_after_anim or {}
+            if na.get('actor_side') == 'party':
+                if na.get('type') == 'run' and na.get('run_success'):
+                    return
+                self.turn_index += 1
+                if self.turn_index >= len(self.party.alive_active_members()):
+                    self.turn_index = 0
+                    self.queue_enemy_round()
+                    if self.enemy_queue:
+                        self.start_animation(self.enemy_queue.pop(0))
+                        return
+                self.begin_player_turn()
+            else:  # enemy acted
+                if self.enemy_queue:
+                    self.start_animation(self.enemy_queue.pop(0))
+                else:
+                    self.turn_index = 0
+                    self.begin_player_turn()
+
+    def resolve_action_impact(self, act: Dict[str, Any]):
+        if act['type'] in ('attack', 'spell'):
+            if act.get('hit', False):
+                dmg = max(1, int(act.get('dmg', 1)))
+                if act['target_side'] == 'enemy':
+                    i = act['target_index']
+                    if 0 <= i < len(self.enemies):
+                        self.enemies[i].hp -= dmg
+                        self.effects.trigger('enemy', i, 300, 7)
+                else:
+                    gi = act['target_index']
+                    if 0 <= gi < len(self.party.members):
+                        t = self.party.members[gi]
+                        t.hp -= dmg
+                        if t.hp <= 0:
+                            t.hp = 0
+                            t.alive = False
+                        self.effects.trigger('party', gi, 300, 7)
+                self.log.add(act.get('label', 'A hit lands.'))
+            else:
+                idx = act['target_index']
+                side = act['target_side']
+                self.add_floater(side, idx, 'MISS', 700)
+                self.log.add(act.get('miss_label', 'The attack misses.'))
+        elif act['type'] == 'heal':
+            gi = act['target_index']
+            amt = act.get('heal', 0)
+            if 0 <= gi < len(self.party.members):
+                t = self.party.members[gi]
+                before = t.hp
+                t.hp = min(t.max_hp, t.hp + amt)
+                self.log.add(f"{act.get('actor_name','Priest')} heals {t.name} for {t.hp - before}.")
+        elif act['type'] == 'run':
+            if act.get('success'):
+                self.log.add("You fled!")
+                self.battle_over = True
+                self.result = 'fled'
+            else:
+                self.log.add("You failed to run!")
+
+    def check_end_and_maybe_finish(self) -> bool:
         if not self.enemy_alive():
-            total_exp = random.randint(20, 60)
-            total_gold = random.randint(10, 40)
-            alive = self.party.alive_active_members()
-            for m in alive:
-                m.exp += total_exp // max(1, len(alive))
-                m.gold += total_gold // max(1, len(self.party.active_members()))
-            self.log.add(f"Victory! +~{total_exp} EXP, +~{total_gold}g")
-            self.battle_over = True
-            self.result = 'victory'
+            self.finish_victory()
             return True
         if not self.party.any_active_alive():
-            self.log.add("The party has fallen...")
-            self.battle_over = True
-            self.result = 'defeat'
+            self.finish_defeat()
             return True
         return False
 
-    def party_attack(self, actor: Character):
-        target = next((e for e in self.enemies if e.hp > 0), None)
-        if not target:
-            return
-        hit_chance = 0.65 + actor.atk_bonus * 0.03 - (10 - target.ac) * 0.02
-        if random.random() < hit_chance:
-            dmg = max(1, random.randint(1, 6) + actor.atk_bonus)
-            target.hp -= dmg
-            self.log.add(f"{actor.name} hits {target.name} for {dmg}.")
-            try:
-                idx = self.enemies.index(target)
-                self.effects.trigger("enemy", idx, duration_ms=300, intensity=6)
-            except ValueError:
-                pass
-        else:
-            self.log.add(f"{actor.name} misses {target.name}.")
+    def finish_victory(self):
+        total_exp = random.randint(20, 60)
+        total_gold = random.randint(10, 40)
+        alive = self.party.alive_active_members()
+        for m in alive:
+            m.exp += total_exp // max(1, len(alive))
+            m.gold += total_gold // max(1, len(self.party.active_members()))
+        self.log.add(f"Victory! +~{total_exp} EXP, +~{total_gold}g")
+        self.battle_over = True
+        self.result = 'victory'
 
-    def party_cast(self, actor: Character):
-        if actor.cls != "Mage" or actor.mp <= 0:
-            self.log.add(f"{actor.name} cannot cast.")
-            return
-        target = next((e for e in self.enemies if e.hp > 0), None)
-        if not target:
-            return
+    def finish_defeat(self):
+        self.log.add("The party has fallen...")
+        self.battle_over = True
+        self.result = 'defeat'
+
+    # ---- Player action creators ----
+    def make_attack_action(self, actor: Character, target_i: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        if target_i is None:
+            target_i = next((i for i, e in enumerate(self.enemies) if e.hp > 0), None)
+        if target_i is None:
+            return None
+        e = self.enemies[target_i]
+        hit_chance = 0.65 + actor.atk_bonus * 0.03 - (10 - e.ac) * 0.02
+        hit = random.random() < hit_chance
+        dmg = max(1, random.randint(1, 6) + actor.atk_bonus)
+        gi = self.party.members.index(actor)
+        return {
+            'type': 'attack', 'actor_side': 'party', 'actor_index': gi,
+            'target_side': 'enemy', 'target_index': target_i,
+            'hit': hit, 'dmg': dmg,
+            'label': f"{actor.name} hits {e.name} for {dmg}.",
+            'miss_label': f"{actor.name} misses {e.name}.",
+        }
+
+    def make_spell_action(self, actor: Character) -> Optional[Dict[str, Any]]:
+        if actor.cls != 'Mage' or actor.mp <= 0:
+            return None
+        target_i = next((i for i, e in enumerate(self.enemies) if e.hp > 0), None)
+        if target_i is None:
+            return None
         actor.mp -= 1
         dmg = max(1, random.randint(4, 8) + ability_mod(actor.iq))
-        target.hp -= dmg
-        self.log.add(f"{actor.name} casts Spark for {dmg}!")
-        try:
-            idx = self.enemies.index(target)
-            self.effects.trigger("enemy", idx, duration_ms=350, intensity=7)
-        except ValueError:
-            pass
+        gi = self.party.members.index(actor)
+        e = self.enemies[target_i]
+        return {
+            'type': 'spell', 'actor_side': 'party', 'actor_index': gi,
+            'target_side': 'enemy', 'target_index': target_i,
+            'hit': True, 'dmg': dmg,
+            'label': f"{actor.name} casts Spark for {dmg}!",
+        }
 
-    def party_heal(self, actor: Character):
-        if actor.cls != "Priest" or actor.mp <= 0:
-            self.log.add(f"{actor.name} cannot heal.")
-            return
+    def make_heal_action(self, actor: Character) -> Optional[Dict[str, Any]]:
+        if actor.cls != 'Priest' or actor.mp <= 0:
+            return None
         target = min((m for m in self.party.active_members() if m.alive), key=lambda c: c.hp / max(1, c.max_hp), default=None)
         if not target:
-            return
+            return None
         actor.mp -= 1
         amt = max(1, random.randint(6, 10) + ability_mod(actor.piety))
-        target.hp = min(target.max_hp, target.hp + amt)
-        self.log.add(f"{actor.name} heals {target.name} for {amt}.")
+        gi = self.party.members.index(actor)
+        ti = self.party.members.index(target)
+        return {
+            'type': 'heal', 'actor_side': 'party', 'actor_index': gi,
+            'target_side': 'party', 'target_index': ti,
+            'heal': amt, 'actor_name': actor.name,
+        }
 
-    def try_run(self):
-        if random.random() < 0.55:
-            self.log.add("You fled!")
-            self.battle_over = True
-            self.result = 'fled'
-        else:
-            self.log.add("You failed to run!")
+    def make_run_action(self) -> Dict[str, Any]:
+        success = random.random() < 0.55
+        gi = self.current_actor_global_ix()
+        return {'type': 'run', 'actor_side': 'party', 'actor_index': gi, 'success': success}
 
 
 # ------------------------------ Game ---------------------------------------
@@ -546,25 +786,42 @@ class Game:
         self.log = MessageLog()
         self.party = Party()
         self.mode = MODE_TOWN
-        self.return_mode = MODE_TOWN  # where to return after modal screens
+        self.return_mode = MODE_TOWN
 
         self.dun = Dungeon(MAZE_W, MAZE_H)
         self.level_ix = 0
         self.dun.ensure_level(0)
         self.pos = (2, 2)
-        self.facing = 1  # East
+        self.facing = 1
         self.effects = HitEffects()
         self.in_battle: Optional[Battle] = None
 
         self.menu_index = 0
         self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
+        self.create_confirm_index = 0
         self.shop_index = 0
         self.pause_index = 0
 
         # Items UI state
-        self.items_phase = 'member'  # 'member' -> 'items'
+        self.items_phase = 'member'
         self.items_member_ix = 0
         self.items_item_ix = 0
+
+        # Tavern UI state
+        self.party_mode: str = 'menu'  # 'menu' | 'dismiss_select' | 'dismiss_confirm'
+        self.party_actions_index = 0
+        self.party_dismiss_index = 0
+        self.party_confirm_index = 0
+
+        # Status screen state
+        self.status_phase = 'select'
+        self.status_index = 0
+
+        # Save/Load menu index
+        self.saveload_index = 0
+        # Temple/Training (centered menus)
+        self.temple_index = 0
+        self.training_index = 0
 
         self.encounter_rate = 0.22
 
@@ -599,14 +856,14 @@ class Game:
         view.fill((18, 18, 24))
         self.r.text_big(view, "Town Square", (20, 16))
         options = [
-            "Tavern (Roster)",         # 0
-            "Form Party (Choose Active)", # 1
-            "Status",                  # 2
-            "Training (Level Up)",     # 3
-            "Temple (Heal/Revive)",    # 4
-            "Trader (Shop)",           # 5
-            "Enter the Labyrinth",     # 6
-            "Save / Load",             # 7
+            "Tavern (Roster)",
+            "Form Party (Choose Active)",
+            "Status",
+            "Training (Level Up)",
+            "Temple (Heal/Revive)",
+            "Trader (Shop)",
+            "Enter the Labyrinth",
+            "Save / Load",
         ]
         y = 56
         for i, opt in enumerate(options):
@@ -629,11 +886,16 @@ class Game:
     def select_town_option(self, ix):
         if ix == 0:
             self.mode = MODE_PARTY
+            self.party_mode = 'menu'  # auto-open menu
+            self.party_actions_index = 0
         elif ix == 1:
             self.mode = MODE_FORM
         elif ix == 2:
-            self.return_mode = MODE_TOWN
-            self.mode = MODE_STATUS
+            if not self.party.active:
+                self.log.add("Select an active party first (Form Party).")
+            else:
+                self.return_mode = MODE_TOWN
+                self.mode = MODE_STATUS
         elif ix == 3:
             self.mode = MODE_TRAINING
         elif ix == 4:
@@ -655,7 +917,7 @@ class Game:
         elif ix == 7:
             self.mode = MODE_SAVELOAD
 
-    # --------------- Party / Creation ---------------
+    # --------------- Party / Tavern ---------------
     def draw_party(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
@@ -665,28 +927,121 @@ class Game:
             active_tag = "*" if i in self.party.active else " "
             self.r.text(view, f"{i+1:>2}{active_tag} {m.name} Lv{m.level} {m.cls}", (32, y)); y += 18
             self.r.text_small(view, f"HP {m.hp}/{m.max_hp}  MP {m.mp}/{m.max_mp}  AC {m.defense_ac:+}  ATK {m.atk_bonus:+}", (44, y)); y += 14
-        y += 6
-        self.r.text_small(view, "N: New  D: Dismiss last  Esc: Back", (32, y), LIGHT)
+        # Centered menu (automatically open)
+        if self.party_mode == 'menu':
+            opts = ["Create", "Dismiss", "Back"]
+            self.r.draw_center_menu(opts, self.party_actions_index)
+        elif self.party_mode == 'dismiss_select':
+            opts = [f"{i+1:>2}. {m.name} — Lv{m.level} {m.cls}" for i, m in enumerate(self.party.members)] or ["(no characters)"]
+            self.r.draw_center_menu(opts + ["Back"], self.party_dismiss_index)
+        elif self.party_mode == 'dismiss_confirm':
+            # darken background
+            s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            s.fill((0, 0, 0, 160))
+            view.blit(s, (0, 0))
+            # message and yes/no menu
+            if self.party.members:
+                name = self.party.members[self.party_dismiss_index % len(self.party.members)].name
+            else:
+                name = "(nobody)"
+            # draw message above menu
+            msg = f"Dismiss {name}?"
+            tw = self.r.font_big.size(msg)[0]
+            tx = WIDTH // 2 - tw // 2
+            ty = VIEW_H // 2 - 80
+            self.r.text_big(view, msg, (tx, ty))
+            self.r.draw_center_menu(["Yes", "No"], self.party_confirm_index)
 
-    def party_input(self, event):
+    def _dismiss_member(self, ix: int):
+        if ix < 0 or ix >= len(self.party.members):
+            return
+        # adjust active indices
+        new_active = []
+        for a in self.party.active:
+            if a == ix:
+                continue
+            new_active.append(a - 1 if a > ix else a)
+        self.party.active = new_active
+        self.party.members.pop(ix)
+        self.party.clamp_active()
+
+    # --------------- Save/Load ---------------
+    def draw_saveload(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((18, 18, 24))
+        self.r.text_big(view, "Save / Load", (20, 16))
+        self.r.text(view, "S: Save  L: Load  Esc: Back", (32, 56), LIGHT)
+
+    def saveload_input(self, event):
         if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_n:
-                if len(self.party.members) >= ROSTER_MAX:
-                    self.log.add("Roster is full.")
-                else:
-                    self.mode = MODE_CREATE
-                    self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
-            elif event.key == pygame.K_d:
-                if self.party.members:
-                    ix = len(self.party.members) - 1
-                    self.party.members.pop()
-                    if ix in self.party.active:
-                        self.party.active.remove(ix)
-                    self.party.clamp_active()
-                    self.log.add("Last roster member dismissed.")
+            if event.key == pygame.K_s:
+                self.save()
+            elif event.key == pygame.K_l:
+                self.load()
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
 
+
+
+    def party_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if self.party_mode == 'menu':
+                opts_len = 3
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.party_actions_index = (self.party_actions_index - 1) % opts_len
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.party_actions_index = (self.party_actions_index + 1) % opts_len
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    choice = self.party_actions_index
+                    if choice == 0:  # Create
+                        if len(self.party.members) >= ROSTER_MAX:
+                            self.log.add("Roster is full.")
+                        else:
+                            self.mode = MODE_CREATE
+                            self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
+                    elif choice == 1:  # Dismiss
+                        if not self.party.members:
+                            self.log.add("No one to dismiss.")
+                        else:
+                            self.party_mode = 'dismiss_select'
+                            self.party_dismiss_index = 0
+                    else:  # Back
+                        self.mode = MODE_TOWN
+                elif event.key == pygame.K_ESCAPE:
+                    self.mode = MODE_TOWN
+            elif self.party_mode == 'dismiss_select':
+                n = max(1, len(self.party.members) + 1)  # +1 for Back
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.party_dismiss_index = (self.party_dismiss_index - 1) % n
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.party_dismiss_index = (self.party_dismiss_index + 1) % n
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.party_dismiss_index == len(self.party.members):
+                        self.party_mode = 'menu'
+                        self.party_actions_index = 1  # keep focus on Dismiss
+                    else:
+                        self.party_mode = 'dismiss_confirm'
+                        self.party_confirm_index = 0
+                elif event.key == pygame.K_ESCAPE:
+                    self.party_mode = 'menu'
+            elif self.party_mode == 'dismiss_confirm':
+                if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
+                    self.party_confirm_index = 1 - self.party_confirm_index  # toggle between 0 and 1
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.party_confirm_index == 0:  # Yes
+                        if self.party.members:
+                            ix = self.party_dismiss_index % len(self.party.members)
+                            name = self.party.members[ix].name
+                            self._dismiss_member(ix)
+                            self.log.add(f"{name} has been dismissed.")
+                        self.party_mode = 'menu'
+                        self.party_actions_index = 1
+                    else:  # No
+                        self.party_mode = 'dismiss_select'
+                elif event.key == pygame.K_ESCAPE:
+                    self.party_mode = 'dismiss_select'
+
+    # --------------- Form Party ---------------
     def draw_form(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
@@ -723,31 +1078,56 @@ class Game:
                 self.party.clamp_active()
                 self.mode = MODE_TOWN
 
+    # --------------- Status ---------------
     def draw_status(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        self.r.text_big(view, "Status", (20, 16))
-        y = 50
-        # Active first
-        if self.party.active:
-            self.r.text(view, "Active:", (32, y)); y += 18
-            for idx in self.party.active:
-                if 0 <= idx < len(self.party.members):
-                    m = self.party.members[idx]
-                    self.r.text(view, f"• {m.name} Lv{m.level} {m.cls}", (48, y)); y += 16
-                    self.r.text_small(view, f"HP {m.hp}/{m.max_hp}  MP {m.mp}/{m.max_mp}  STR {m.str_} IQ {m.iq} PIE {m.piety} VIT {m.vit} AGI {m.agi} LCK {m.luck}", (60, y)); y += 14
-            y += 8
-        self.r.text(view, "Roster:", (32, y)); y += 18
-        for i, m in enumerate(self.party.members):
-            star = "*" if i in self.party.active else " "
-            self.r.text_small(view, f"{star} {i+1:>2} {m.name} Lv{m.level} {m.cls}  HP {m.hp}/{m.max_hp}  MP {m.mp}/{m.max_mp}", (48, y)); y += 14
-        y += 6
-        self.r.text_small(view, "Esc: Close", (32, y), LIGHT)
+        if self.status_phase == 'select':
+            self.r.text_big(view, "Status — Choose Character", (20, 16))
+            options = [f"{i+1:>2}. {m.name} — Lv{m.level} {m.cls}" for i, m in enumerate(self.party.members)] or ["(no characters)"]
+            self.r.draw_center_menu(options, self.status_index)
+            self.r.text_small(view, "Enter: View  Esc: Back", (32, VIEW_H - 28), LIGHT)
+        else:
+            if not self.party.members:
+                self.status_phase = 'select'
+                return
+            m = self.party.members[self.status_index % len(self.party.members)]
+            pad_x, pad_y = 16, 12
+            card_w, card_h = 600, 260
+            x = WIDTH//2 - card_w//2
+            y = VIEW_H//2 - card_h//2
+            rect = pygame.Rect(x, y, card_w, card_h)
+            pygame.draw.rect(view, (20, 20, 28), rect)
+            pygame.draw.rect(view, YELLOW, rect, 2)
+            self.r.text_big(view, f"{m.name} — Lv{m.level} {m.cls}", (x + 16, y + 14))
+            self.r.text(view, f"HP {m.hp}/{m.max_hp}   MP {m.mp}/{m.max_mp}", (x + 16, y + 48))
+            self.r.text(view, f"STR {m.str_}  IQ {m.iq}  PIE {m.piety}  VIT {m.vit}  AGI {m.agi}  LCK {m.luck}", (x + 16, y + 72))
+            self.r.text(view, f"AC {m.defense_ac:+}  ATK {m.atk_bonus:+}  Gold {m.gold}", (x + 16, y + 96))
+            self.r.text(view, f"Weapon ATK +{m.equipment.weapon_atk}   Armor AC {m.equipment.armor_ac:+}", (x + 16, y + 120))
+            inv = ", ".join(ITEMS_BY_ID.get(iid, {"name": iid})["name"] for iid in m.inventory) or "(no items)"
+            self.r.text(view, f"Items: {inv}", (x + 16, y + 152))
+            self.r.draw_center_menu(["Back"], 0)
 
     def status_input(self, event):
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-            self.mode = self.return_mode
+        if event.type == pygame.KEYDOWN:
+            if self.status_phase == 'select':
+                n = max(1, len(self.party.members))
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.status_index = (self.status_index - 1) % n
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.status_index = (self.status_index + 1) % n
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.party.members:
+                        self.status_phase = 'detail'
+                elif event.key == pygame.K_ESCAPE:
+                    self.mode = self.return_mode
+            else:
+                if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
+                    self.status_phase = 'select'
+                    if self.return_mode != MODE_STATUS:
+                        self.mode = self.return_mode
 
+    # --------------- Creation ---------------
     def draw_create(self):
         s = self.create_state
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -755,8 +1135,8 @@ class Game:
         self.r.text_big(view, "Create Adventurer", (20, 16))
         y = 60
         if s["step"] == 0:
-            self.r.text(view, "Enter name: ", (32, y))
-            self.r.text(view, s["name"] + "_", (170, y), YELLOW)
+            self.r.text(view, "Enter name:", (32, y))
+            self.r.text(view, s["name"] + "_", (260, y), YELLOW)
             self.r.text_small(view, "Enter to confirm", (32, y + 28), LIGHT)
         elif s["step"] == 1:
             self.r.text(view, "Race (←/→, Enter)", (32, y))
@@ -773,7 +1153,7 @@ class Game:
             for i, (k, v) in enumerate(stats):
                 self.r.text(view, f"{k}:{v:2d}", (32 + (i % 3) * 120, y2 + (i // 3) * 20))
             self.r.text(view, f"HP {temp.max_hp}  MP {temp.mp}", (32, y2 + 44))
-            self.r.text_small(view, "Enter: Accept  R: Reroll  Esc: Cancel", (32, y2 + 66), LIGHT)
+            self.r.draw_center_menu(["Accept", "Reroll", "Cancel"], self.create_confirm_index)
 
     def create_input(self, event):
         s = self.create_state
@@ -803,20 +1183,34 @@ class Game:
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     s["step"] = 3
             elif s["step"] == 3:
-                if event.key == pygame.K_RETURN:
-                    if len(self.party.members) >= ROSTER_MAX:
-                        self.log.add("Roster is full.")
-                    else:
-                        newc = Character(s["name"], RACES[s["race_ix"]], CLASSES[s["class_ix"]])
-                        self.party.members.append(newc)
-                        self.log.add(f"{newc.name} the {newc.cls} joins the roster.")
-                    self.mode = MODE_PARTY
-                elif event.key == pygame.K_r:
-                    s["step"] = 2; s["step"] = 3
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.create_confirm_index = (self.create_confirm_index - 1) % 3
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.create_confirm_index = (self.create_confirm_index + 1) % 3
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    choice = self.create_confirm_index
+                    if choice == 0:  # Accept
+                        if len(self.party.members) >= ROSTER_MAX:
+                            self.log.add("Roster is full.")
+                        else:
+                            newc = Character(s["name"], RACES[s["race_ix"]], CLASSES[s["class_ix"]])
+                            self.party.members.append(newc)
+                            self.log.add(f"{newc.name} the {newc.cls} joins the roster.")
+                        self.mode = MODE_PARTY
+                        self.party_mode = 'menu'
+                        self.party_actions_index = 0
+                    elif choice == 1:  # Reroll
+                        s["step"] = 2; s["step"] = 3
+                    else:  # Cancel
+                        self.mode = MODE_PARTY
+                        self.party_mode = 'menu'
+                        self.party_actions_index = 0
                 elif event.key == pygame.K_ESCAPE:
                     self.mode = MODE_PARTY
+                    self.party_mode = 'menu'
+                    self.party_actions_index = 0
 
-    # --------------- Shop & Temple & Training ---------------
+    # --------------- Shop / Temple / Training ---------------
     def draw_shop(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
@@ -859,19 +1253,23 @@ class Game:
     def draw_temple(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        self.r.text_big(view, "Temple — Healer", (20, 16))
-        y = 56
-        for i, m in enumerate(self.party.members):
-            self.r.text(view, f"{i+1}. {m.name} HP {m.hp}/{m.max_hp} {'(DOWN)' if not m.alive else ''}", (32, y))
-            y += 18
-        self.r.text_small(view, "1‑9 heal (10g) / revive (50g). Esc: Back", (32, y + 4), LIGHT)
+        opts = [f"{i+1:>2}. {m.name} — {'DOWN ' if not m.alive else ''}HP {m.hp}/{m.max_hp}" for i, m in enumerate(self.party.members)]
+        opts += ["Back"]
+        self.r.draw_center_menu(opts or ["(no characters)", "Back"], self.temple_index)
+
 
     def temple_input(self, event):
         if event.type == pygame.KEYDOWN:
-            if pygame.K_1 <= event.key <= pygame.K_9:
-                ix = event.key - pygame.K_1
-                if ix < len(self.party.members):
-                    m = self.party.members[ix]
+            n = max(1, len(self.party.members) + 1)  # +1 for Back
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.temple_index = (self.temple_index - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.temple_index = (self.temple_index + 1) % n
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.temple_index == len(self.party.members):
+                    self.mode = MODE_TOWN
+                elif self.party.members:
+                    m = self.party.members[self.temple_index]
                     if not m.alive:
                         cost = 50
                         if self.total_gold() >= cost:
@@ -892,22 +1290,27 @@ class Game:
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
 
+
     def draw_training(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        self.r.text_big(view, "Training Grounds", (20, 16))
-        y = 56
-        self.r.text_small(view, "Each level costs 100 EXP. Press number to level up.", (32, y)); y += 18
-        for i, m in enumerate(self.party.members):
-            self.r.text(view, f"{i+1}. {m.name} Lv{m.level} EXP {m.exp}", (32, y)); y += 18
-        self.r.text_small(view, "Esc: Back", (32, y + 4), LIGHT)
+        opts = [f"{i+1:>2}. {m.name} — Lv{m.level}  EXP {m.exp}" for i, m in enumerate(self.party.members)]
+        opts += ["Back"]
+        self.r.draw_center_menu(opts or ["(no characters)", "Back"], self.training_index)
+
 
     def training_input(self, event):
         if event.type == pygame.KEYDOWN:
-            if pygame.K_1 <= event.key <= pygame.K_9:
-                ix = event.key - pygame.K_1
-                if ix < len(self.party.members):
-                    m = self.party.members[ix]
+            n = max(1, len(self.party.members) + 1)  # +1 for Back
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.training_index = (self.training_index - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.training_index = (self.training_index + 1) % n
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.training_index == len(self.party.members):
+                    self.mode = MODE_TOWN
+                elif self.party.members:
+                    m = self.party.members[self.training_index]
                     if m.exp >= 100:
                         m.exp -= 100
                         m.level += 1
@@ -923,21 +1326,6 @@ class Game:
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
 
-    # --------------- Save/Load ---------------
-    def draw_saveload(self):
-        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
-        view.fill((18, 18, 24))
-        self.r.text_big(view, "Save / Load", (20, 16))
-        self.r.text(view, "S: Save  L: Load  Esc: Back", (32, 56), LIGHT)
-
-    def saveload_input(self, event):
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_s:
-                self.save()
-            elif event.key == pygame.K_l:
-                self.load()
-            elif event.key == pygame.K_ESCAPE:
-                self.mode = MODE_TOWN
 
     # --------------- Maze Helpers ---------------
     def grid(self) -> List[List[int]]:
@@ -955,10 +1343,8 @@ class Game:
         nx, ny = self.pos[0] + dx, self.pos[1] + dy
         if self.is_open(nx, ny):
             self.pos = (nx, ny)
-            # special tile behavior first
             special = self.grid()[ny][nx] in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
             self.check_special_tile()
-            # encounters only on empty tiles
             if not special and random.random() < self.encounter_rate:
                 self.start_battle()
         else:
@@ -1029,7 +1415,6 @@ class Game:
     # --------------- Pause Menu & Items ---------------
     def draw_pause(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
-        # dim overlay
         s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
         s.fill((0, 0, 0, 160))
         view.blit(s, (0, 0))
@@ -1048,15 +1433,15 @@ class Game:
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.pause_index = (self.pause_index + 1) % 3
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if self.pause_index == 0:  # Status
+                if self.pause_index == 0:
                     self.return_mode = MODE_PAUSE
                     self.mode = MODE_STATUS
-                elif self.pause_index == 1:  # Items
+                elif self.pause_index == 1:
                     self.items_phase = 'member'
                     self.items_member_ix = 0
                     self.items_item_ix = 0
                     self.mode = MODE_ITEMS
-                elif self.pause_index == 2:  # Close
+                elif self.pause_index == 2:
                     self.mode = MODE_MAZE
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_MAZE
@@ -1074,7 +1459,7 @@ class Game:
                 self.r.text(view, f"{prefix}{m.name}  HP {m.hp}/{m.max_hp}", (32, y), YELLOW if i == self.items_member_ix else WHITE)
                 y += 20
             self.r.text_small(view, "Esc: Back", (32, y + 6), LIGHT)
-        else:  # items list for selected member
+        else:
             actives = self.party.active_members()
             if not actives:
                 self.items_phase = 'member'
@@ -1106,7 +1491,7 @@ class Game:
                     self.items_item_ix = 0
                 elif event.key == pygame.K_ESCAPE:
                     self.mode = MODE_PAUSE
-            else:  # items phase
+            else:
                 sel_member = actives[self.items_member_ix % len(actives)] if actives else None
                 if event.key in (pygame.K_UP, pygame.K_k):
                     if sel_member and sel_member.inventory:
@@ -1118,7 +1503,6 @@ class Game:
                     if sel_member and sel_member.inventory:
                         iid = sel_member.inventory[self.items_item_ix]
                         self.use_item(sel_member, iid)
-                        # remove item if consumed
                         it = ITEMS_BY_ID.get(iid, {})
                         if it.get("type") == "consumable":
                             sel_member.inventory.pop(self.items_item_ix)
@@ -1136,54 +1520,104 @@ class Game:
             before = target.hp
             target.hp = min(target.max_hp, target.hp + it.get("heal", 0))
             self.log.add(f"{target.name} drinks a potion (+{target.hp - before} HP).")
-        # you can extend with more items here
 
     # --------------- Battle ---------------
+    def battle_input(self, event):
+        b = self.in_battle
+        if not b or b.battle_over:
+            return
+        if event.type == pygame.KEYDOWN:
+            if b.state == 'menu':
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    b.ui_menu_index = (b.ui_menu_index - 1) % len(b.ui_menu_options)
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    b.ui_menu_index = (b.ui_menu_index + 1) % len(b.ui_menu_options)
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    chosen_id = b.ui_menu_options[b.ui_menu_index][0]
+                    actor = b.current_actor()
+                    if chosen_id == 'attack':
+                        b.state = 'target'
+                        alive_enemy_indices = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                        b.target_menu_index = 0
+                        if not alive_enemy_indices:
+                            b.begin_player_turn()
+                    elif chosen_id == 'spell':
+                        act = b.make_spell_action(actor)
+                        if act:
+                            b.start_animation(act)
+                    elif chosen_id == 'heal':
+                        act = b.make_heal_action(actor)
+                        if act:
+                            b.start_animation(act)
+                    elif chosen_id == 'run':
+                        act = b.make_run_action()
+                        b.start_animation(act)
+            elif b.state == 'target':
+                alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                if not alive:
+                    b.begin_player_turn(); return
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    b.target_menu_index = (b.target_menu_index - 1) % len(alive)
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    b.target_menu_index = (b.target_menu_index + 1) % len(alive)
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    actor = b.current_actor()
+                    target_i = alive[b.target_menu_index]
+                    act = b.make_attack_action(actor, target_i)
+                    if act:
+                        b.start_animation(act)
+                elif event.key == pygame.K_ESCAPE:
+                    b.begin_player_turn()
+
     def draw_battle(self):
+        b = self.in_battle
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((12, 12, 18))
         self.r.text_big(view, "Battle!", (20, 16))
-        # enemies with hit effects
-        y = 54
-        for i, e in enumerate(self.in_battle.enemies):
-            (ox, oy), color = self.effects.sample("enemy", i, base_color=WHITE)
-            bar_w = 240
-            hp_ratio = max(0.0, e.hp / 20.0)
-            pygame.draw.rect(view, (50, 50, 80), (40 + ox, y + oy, bar_w, 14), 1)
-            pygame.draw.rect(view, RED, (40 + ox, y + oy, int(bar_w * hp_ratio), 14))
-            self.r.text_small(view, f"{e.name}  HP:{e.hp:>2}", (290 + ox, y - 2 + oy), color)
-            y += 22
-        actor = self.in_battle.current_actor()
-        if actor is not None:
-            self.r.text_small(view, f"{actor.name}'s turn — A,S,H,R", (40, VIEW_H - 44), LIGHT)
-        else:
-            self.r.text_small(view, "Enemy phase...", (40, VIEW_H - 44), LIGHT)
-
-    def battle_input(self, event):
-        b = self.in_battle
-        if event.type == pygame.KEYDOWN and not b.battle_over:
-            actor = b.current_actor()
-            if not actor:
-                return
-            if event.key == pygame.K_a:
-                b.party_attack(actor)
-                b.turn_index += 1
-            elif event.key == pygame.K_s:
-                b.party_cast(actor)
-                b.turn_index += 1
-            elif event.key == pygame.K_h:
-                b.party_heal(actor)
-                b.turn_index += 1
-            elif event.key == pygame.K_r:
-                b.try_run()
-            if b.turn_index >= len(self.party.alive_active_members()) and not b.battle_over:
-                b.step_enemies()
-                b.turn_index = 0
-            if b.end_round_and_check():
-                if b.result in ('victory', 'fled'):
-                    self.mode = MODE_MAZE
-                else:
-                    self.mode = MODE_TOWN
+        party_highlight = set()
+        party_acting = set()
+        enemy_highlight = set()
+        enemy_acting = set()
+        if b:
+            if b.state == 'menu':
+                gi = b.current_actor_global_ix()
+                if gi is not None:
+                    party_highlight.add(gi)
+            if b.state == 'target':
+                alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                if alive:
+                    enemy_highlight.add(alive[b.target_menu_index])
+            if b.state == 'anim' and b.anim:
+                act = b.anim['action']
+                if act['actor_side'] == 'party' and act['actor_index'] is not None:
+                    party_acting.add(act['actor_index'])
+                elif act['actor_side'] == 'enemy':
+                    enemy_acting.add(act['actor_index'])
+        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting) if b else {}
+        party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting)
+        if b:
+            if b.state == 'menu':
+                self.r.draw_center_menu([label for _id, label in b.ui_menu_options], b.ui_menu_index)
+                self.r.text_small(view, "↑/↓ Select  Enter Confirm", (40, VIEW_H - 100), LIGHT)
+            elif b.state == 'target':
+                options = [b.enemies[i].name for i in range(len(b.enemies)) if b.enemies[i].hp > 0] or ["(no targets)"]
+                self.r.draw_center_menu(options + ["Back"], b.target_menu_index if options else 0)
+        now = pygame.time.get_ticks()
+        for f in (b.floaters if b else []):
+            rect = None
+            if f['side'] == 'party':
+                rect = party_rects.get(f['index'])
+            else:
+                rect = enemy_rects.get(f['index'])
+            if not rect:
+                continue
+            t = now - f['start']
+            p = max(0.0, min(1.0, t / f['dur']))
+            y = rect.top - 10 - int(20 * p)
+            alpha = max(0, 255 - int(255 * p))
+            surf = self.r.font_big.render(f['text'], True, WHITE)
+            surf.set_alpha(alpha)
+            view.blit(surf, (rect.centerx - surf.get_width() // 2, y))
 
     # --------------- Gold helpers ---------------
     def total_gold(self) -> int:
@@ -1194,10 +1628,19 @@ class Game:
             self.party.members[0].gold = max(0, self.party.members[0].gold - amount)
 
     # --------------- Main loop ---------------
+    def update(self):
+        if self.mode == MODE_BATTLE and self.in_battle:
+            self.in_battle.update()
+            if self.in_battle.battle_over:
+                if self.in_battle.result in ('victory', 'fled'):
+                    self.mode = MODE_MAZE
+                else:
+                    self.mode = MODE_TOWN
+
     def run(self):
         running = True
         while running:
-            _dt = self.clock.tick(FPS)
+            dt = self.clock.tick(FPS)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -1229,7 +1672,8 @@ class Game:
                     elif self.mode == MODE_BATTLE:
                         self.battle_input(event)
 
-            # draw
+            self.update()
+
             self.r.draw_frame()
             if self.mode == MODE_TOWN:
                 self.draw_town()
