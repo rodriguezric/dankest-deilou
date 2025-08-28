@@ -397,15 +397,14 @@ class Renderer:
         self.text_small(view, f"L{level_ix} pos {pos} {DIR_NAMES[facing]}", (12, 6))
 
     # ---- Generic centered menu (no header) ----
-    def draw_center_menu(self, options: List[str], selected: int = 0):
+    def draw_center_menu(self, options: List[str], selected: int):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         if not options:
             return
-        pad_x, pad_y = 24, 12
+        pad_x, pad_y = 12, 10
         text_w = max(self.font.size(s)[0] for s in options)
         text_h = self.font.get_height()
-        min_w = 360
-        w = max(text_w + pad_x * 2, min_w)
+        w = text_w + pad_x * 2
         h = text_h * len(options) + pad_y * 2
         x = WIDTH // 2 - w // 2
         y = VIEW_H // 2 - h // 2
@@ -819,9 +818,6 @@ class Game:
 
         # Save/Load menu index
         self.saveload_index = 0
-        # Temple/Training (centered menus)
-        self.temple_index = 0
-        self.training_index = 0
 
         self.encounter_rate = 0.22
 
@@ -891,11 +887,8 @@ class Game:
         elif ix == 1:
             self.mode = MODE_FORM
         elif ix == 2:
-            if not self.party.active:
-                self.log.add("Select an active party first (Form Party).")
-            else:
-                self.return_mode = MODE_TOWN
-                self.mode = MODE_STATUS
+            self.return_mode = MODE_TOWN
+            self.mode = MODE_STATUS
         elif ix == 3:
             self.mode = MODE_TRAINING
         elif ix == 4:
@@ -964,24 +957,6 @@ class Game:
         self.party.active = new_active
         self.party.members.pop(ix)
         self.party.clamp_active()
-
-    # --------------- Save/Load ---------------
-    def draw_saveload(self):
-        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
-        view.fill((18, 18, 24))
-        self.r.text_big(view, "Save / Load", (20, 16))
-        self.r.text(view, "S: Save  L: Load  Esc: Back", (32, 56), LIGHT)
-
-    def saveload_input(self, event):
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_s:
-                self.save()
-            elif event.key == pygame.K_l:
-                self.load()
-            elif event.key == pygame.K_ESCAPE:
-                self.mode = MODE_TOWN
-
-
 
     def party_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1083,30 +1058,60 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
         if self.status_phase == 'select':
-            self.r.text_big(view, "Status — Choose Character", (20, 16))
-            options = [f"{i+1:>2}. {m.name} — Lv{m.level} {m.cls}" for i, m in enumerate(self.party.members)] or ["(no characters)"]
+            # Show just character names in a centered list
+            options = [m.name for m in self.party.members] or ["(no characters)"]
             self.r.draw_center_menu(options, self.status_index)
             self.r.text_small(view, "Enter: View  Esc: Back", (32, VIEW_H - 28), LIGHT)
         else:
+            # Detail view: two columns, no centered Back menu.
             if not self.party.members:
                 self.status_phase = 'select'
                 return
             m = self.party.members[self.status_index % len(self.party.members)]
             pad_x, pad_y = 16, 12
-            card_w, card_h = 600, 260
-            x = WIDTH//2 - card_w//2
-            y = VIEW_H//2 - card_h//2
+            card_w, card_h = 640, 300
+            x = WIDTH // 2 - card_w // 2
+            y = VIEW_H // 2 - card_h // 2
             rect = pygame.Rect(x, y, card_w, card_h)
             pygame.draw.rect(view, (20, 20, 28), rect)
             pygame.draw.rect(view, YELLOW, rect, 2)
-            self.r.text_big(view, f"{m.name} — Lv{m.level} {m.cls}", (x + 16, y + 14))
-            self.r.text(view, f"HP {m.hp}/{m.max_hp}   MP {m.mp}/{m.max_mp}", (x + 16, y + 48))
-            self.r.text(view, f"STR {m.str_}  IQ {m.iq}  PIE {m.piety}  VIT {m.vit}  AGI {m.agi}  LCK {m.luck}", (x + 16, y + 72))
-            self.r.text(view, f"AC {m.defense_ac:+}  ATK {m.atk_bonus:+}  Gold {m.gold}", (x + 16, y + 96))
-            self.r.text(view, f"Weapon ATK +{m.equipment.weapon_atk}   Armor AC {m.equipment.armor_ac:+}", (x + 16, y + 120))
+            # Header
+            self.r.text_big(view, f"{m.name}", (x + 16, y + 14))
+            # Two-column stats
+            col1_x = x + 16
+            col2_x = x + card_w // 2 + 8
+            row_y  = y + 56
+            line_h = 22
+
+            left = [
+                f"Class {m.cls}  Lv {m.level}",
+                f"HP {m.hp}/{m.max_hp}",
+                f"MP {m.mp}/{m.max_mp}",
+                f"AC {m.defense_ac:+}",
+                f"ATK {m.atk_bonus:+}",
+                f"Gold {m.gold}",
+            ]
+            right = [
+                f"STR {m.str_}",
+                f"IQ {m.iq}",
+                f"PIE {m.piety}",
+                f"VIT {m.vit}",
+                f"AGI {m.agi}",
+                f"LCK {m.luck}",
+            ]
+            for i, txt in enumerate(left):
+                self.r.text(view, txt, (col1_x, row_y + i * line_h))
+            for i, txt in enumerate(right):
+                self.r.text(view, txt, (col2_x, row_y + i * line_h))
+
+            # Equipment and items
+            self.r.text(view, f"Weapon ATK +{m.equipment.weapon_atk}   Armor AC {m.equipment.armor_ac:+}", (x + 16, y + card_h - 64))
             inv = ", ".join(ITEMS_BY_ID.get(iid, {"name": iid})["name"] for iid in m.inventory) or "(no items)"
-            self.r.text(view, f"Items: {inv}", (x + 16, y + 152))
-            self.r.draw_center_menu(["Back"], 0)
+            self.r.text(view, f"Items: {inv}", (x + 16, y + card_h - 36))
+
+            # Hint: Enter/Esc return to the character list
+            self.r.text_small(view, "Enter/Esc: Back to list", (32, VIEW_H - 28), LIGHT)
+
 
     def status_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1253,23 +1258,19 @@ class Game:
     def draw_temple(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        opts = [f"{i+1:>2}. {m.name} — {'DOWN ' if not m.alive else ''}HP {m.hp}/{m.max_hp}" for i, m in enumerate(self.party.members)]
-        opts += ["Back"]
-        self.r.draw_center_menu(opts or ["(no characters)", "Back"], self.temple_index)
-
+        self.r.text_big(view, "Temple — Healer", (20, 16))
+        y = 56
+        for i, m in enumerate(self.party.members):
+            self.r.text(view, f"{i+1}. {m.name} HP {m.hp}/{m.max_hp} {'(DOWN)' if not m.alive else ''}", (32, y))
+            y += 18
+        self.r.text_small(view, "1‑9 heal (10g) / revive (50g). Esc: Back", (32, y + 4), LIGHT)
 
     def temple_input(self, event):
         if event.type == pygame.KEYDOWN:
-            n = max(1, len(self.party.members) + 1)  # +1 for Back
-            if event.key in (pygame.K_UP, pygame.K_k):
-                self.temple_index = (self.temple_index - 1) % n
-            elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.temple_index = (self.temple_index + 1) % n
-            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if self.temple_index == len(self.party.members):
-                    self.mode = MODE_TOWN
-                elif self.party.members:
-                    m = self.party.members[self.temple_index]
+            if pygame.K_1 <= event.key <= pygame.K_9:
+                ix = event.key - pygame.K_1
+                if ix < len(self.party.members):
+                    m = self.party.members[ix]
                     if not m.alive:
                         cost = 50
                         if self.total_gold() >= cost:
@@ -1290,27 +1291,22 @@ class Game:
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
 
-
     def draw_training(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        opts = [f"{i+1:>2}. {m.name} — Lv{m.level}  EXP {m.exp}" for i, m in enumerate(self.party.members)]
-        opts += ["Back"]
-        self.r.draw_center_menu(opts or ["(no characters)", "Back"], self.training_index)
-
+        self.r.text_big(view, "Training Grounds", (20, 16))
+        y = 56
+        self.r.text_small(view, "Each level costs 100 EXP. Press number to level up.", (32, y)); y += 18
+        for i, m in enumerate(self.party.members):
+            self.r.text(view, f"{i+1}. {m.name} Lv{m.level} EXP {m.exp}", (32, y)); y += 18
+        self.r.text_small(view, "Esc: Back", (32, y + 4), LIGHT)
 
     def training_input(self, event):
         if event.type == pygame.KEYDOWN:
-            n = max(1, len(self.party.members) + 1)  # +1 for Back
-            if event.key in (pygame.K_UP, pygame.K_k):
-                self.training_index = (self.training_index - 1) % n
-            elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.training_index = (self.training_index + 1) % n
-            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if self.training_index == len(self.party.members):
-                    self.mode = MODE_TOWN
-                elif self.party.members:
-                    m = self.party.members[self.training_index]
+            if pygame.K_1 <= event.key <= pygame.K_9:
+                ix = event.key - pygame.K_1
+                if ix < len(self.party.members):
+                    m = self.party.members[ix]
                     if m.exp >= 100:
                         m.exp -= 100
                         m.level += 1
@@ -1326,6 +1322,29 @@ class Game:
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
 
+    # --------------- Save/Load ---------------
+    def draw_saveload(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((18, 18, 24))
+        self.r.text_big(view, "Save / Load", (20, 16))
+        opts = ["Save", "Load", "Back"]
+        self.r.draw_center_menu(opts, self.saveload_index)
+
+    def saveload_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.saveload_index = (self.saveload_index - 1) % 3
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.saveload_index = (self.saveload_index + 1) % 3
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.saveload_index == 0:
+                    self.save()
+                elif self.saveload_index == 1:
+                    self.load()
+                else:
+                    self.mode = MODE_TOWN
+            elif event.key == pygame.K_ESCAPE:
+                self.mode = MODE_TOWN
 
     # --------------- Maze Helpers ---------------
     def grid(self) -> List[List[int]]:
