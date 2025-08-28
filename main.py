@@ -852,31 +852,55 @@ class Game:
 
     
     def draw_title(self):
-        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
-        view.fill((12, 12, 18))
-        overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        # Fullscreen title screen without bottom log; center title and menu
+        screen = self.screen
+        screen.fill((12, 12, 18))
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         t = pygame.time.get_ticks() / 1000.0
         for i in range(8):
-            phase = t * (0.8 + i*0.07) + i * 0.9
+            phase = t * (0.8 + i * 0.07) + i * 0.9
             amp = 10 + i * 2.0
             freq = 0.010 + i * 0.0015
             pts = []
             step = 8
-            mid = VIEW_H // 2 + int(math.sin(phase*0.5)*12)
-            for x in range(0, WIDTH+step, step):
-                y = mid + int(math.sin(x*freq + phase) * amp) + int(math.sin(x*freq*0.5 + phase*1.7) * amp * 0.25)
+            mid = HEIGHT // 2 + int(math.sin(phase * 0.5) * 12)
+            for x in range(0, WIDTH + step, step):
+                y = mid + int(math.sin(x * freq + phase) * amp) + int(math.sin(x * freq * 0.5 + phase * 1.7) * amp * 0.25)
                 pts.append((x, y))
             col = (120, 140, 220, 22) if i % 2 == 0 else (160, 140, 220, 16)
             if len(pts) >= 2:
                 pygame.draw.aalines(overlay, col, False, pts)
-        view.blit(overlay, (0, 0))
+        screen.blit(overlay, (0, 0))
 
         title = "Dankest Deilou"
-        self.r.text_big(view, title, (WIDTH//2 - self.r.font_big.size(title)[0]//2 + 2, 82 + 2), (0,0,0))
-        self.r.text_big(view, title, (WIDTH//2 - self.r.font_big.size(title)[0]//2, 82), YELLOW)
-
         options = ["New Game", "Load", "Exit"]
-        self.r.draw_center_menu(options, self.title_index)
+
+        # Compute menu height to position title above it while keeping composition centered
+        pad_y = 10
+        text_h = self.r.font.get_height()
+        menu_h = text_h * len(options) + pad_y * 2
+        title_x = WIDTH // 2 - self.r.font_big.size(title)[0] // 2
+        title_y = HEIGHT // 2 - menu_h // 2 - 60
+        self.r.text_big(screen, title, (title_x + 2, title_y + 2), (0, 0, 0))
+        self.r.text_big(screen, title, (title_x, title_y), YELLOW)
+
+        # Centered menu using full screen height
+        if options:
+            pad_x, pad_y = 12, 10
+            text_w = max(self.r.font.size(s + "  ")[0] for s in options)
+            w = text_w + pad_x * 2
+            h = text_h * len(options) + pad_y * 2
+            x = WIDTH // 2 - w // 2
+            y = HEIGHT // 2 - h // 2
+            rect = pygame.Rect(x, y, w, h)
+            pygame.draw.rect(screen, (16, 16, 20), rect)
+            pygame.draw.rect(screen, YELLOW, rect, 2)
+            cy = y + pad_y
+            for i, s in enumerate(options):
+                color = YELLOW if i == self.title_index else WHITE
+                prefix = "> " if i == self.title_index else "  "
+                self.r.text(screen, prefix + s, (x + pad_x, cy), color)
+                cy += text_h
     
     def title_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1719,37 +1743,40 @@ class Game:
 
             self.update()
 
-            self.r.draw_frame()
             if self.mode == MODE_TITLE:
+                # Title renders fullscreen and hides log
                 self.draw_title()
-            elif self.mode == MODE_TOWN:
-                self.draw_town()
-            elif self.mode == MODE_PARTY:
-                self.draw_party()
-            elif self.mode == MODE_FORM:
-                self.draw_form()
-            elif self.mode == MODE_STATUS:
-                self.draw_status()
-            elif self.mode == MODE_CREATE:
-                self.draw_create()
-            elif self.mode == MODE_SHOP:
-                self.draw_shop()
-            elif self.mode == MODE_TEMPLE:
-                self.draw_temple()
-            elif self.mode == MODE_TRAINING:
-                self.draw_training()
-            elif self.mode == MODE_SAVELOAD:
-                self.draw_saveload()
-            elif self.mode == MODE_MAZE:
-                self.draw_maze()
-            elif self.mode == MODE_PAUSE:
-                self.draw_maze(); self.draw_pause()
-            elif self.mode == MODE_ITEMS:
-                self.draw_items()
-            elif self.mode == MODE_BATTLE:
-                self.draw_battle()
+            else:
+                self.r.draw_frame()
+                if self.mode == MODE_TOWN:
+                    self.draw_town()
+                elif self.mode == MODE_PARTY:
+                    self.draw_party()
+                elif self.mode == MODE_FORM:
+                    self.draw_form()
+                elif self.mode == MODE_STATUS:
+                    self.draw_status()
+                elif self.mode == MODE_CREATE:
+                    self.draw_create()
+                elif self.mode == MODE_SHOP:
+                    self.draw_shop()
+                elif self.mode == MODE_TEMPLE:
+                    self.draw_temple()
+                elif self.mode == MODE_TRAINING:
+                    self.draw_training()
+                elif self.mode == MODE_SAVELOAD:
+                    self.draw_saveload()
+                elif self.mode == MODE_MAZE:
+                    self.draw_maze()
+                elif self.mode == MODE_PAUSE:
+                    self.draw_maze(); self.draw_pause()
+                elif self.mode == MODE_ITEMS:
+                    self.draw_items()
+                elif self.mode == MODE_BATTLE:
+                    self.draw_battle()
 
-            self.r.draw_log(self.log.lines)
+                # Draw message log for non-title scenes
+                self.r.draw_log(self.log.lines)
             pygame.display.flip()
 
         pygame.quit()
