@@ -19,6 +19,7 @@ Tested with: Python 3.10+, pygame 2.5+
 import json
 import os
 import random
+import math
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional, Tuple, Dict, Any
 
@@ -45,6 +46,7 @@ YELLOW = (240, 220, 80)
 PURPLE = (180, 120, 240)
 
 # Modes
+MODE_TITLE = "TITLE"
 MODE_TOWN = "TOWN"
 MODE_CREATE = "CREATE"
 MODE_PARTY = "PARTY"
@@ -784,7 +786,7 @@ class Game:
         self.r = Renderer(self.screen)
         self.log = MessageLog()
         self.party = Party()
-        self.mode = MODE_TOWN
+        self.mode = MODE_TITLE
         self.return_mode = MODE_TOWN
 
         self.dun = Dungeon(MAZE_W, MAZE_H)
@@ -818,6 +820,8 @@ class Game:
 
         # Save/Load menu index
         self.saveload_index = 0
+        # Title screen menu index
+        self.title_index = 0
 
         self.encounter_rate = 0.22
 
@@ -846,6 +850,54 @@ class Game:
         self.facing = int(data.get("facing", 1))
         self.log.add("Game loaded.")
 
+    
+    def draw_title(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((12, 12, 18))
+        overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        t = pygame.time.get_ticks() / 1000.0
+        for i in range(8):
+            phase = t * (0.8 + i*0.07) + i * 0.9
+            amp = 10 + i * 2.0
+            freq = 0.010 + i * 0.0015
+            pts = []
+            step = 8
+            mid = VIEW_H // 2 + int(math.sin(phase*0.5)*12)
+            for x in range(0, WIDTH+step, step):
+                y = mid + int(math.sin(x*freq + phase) * amp) + int(math.sin(x*freq*0.5 + phase*1.7) * amp * 0.25)
+                pts.append((x, y))
+            col = (120, 140, 220, 22) if i % 2 == 0 else (160, 140, 220, 16)
+            if len(pts) >= 2:
+                pygame.draw.aalines(overlay, col, False, pts)
+        view.blit(overlay, (0, 0))
+
+        title = "Dankest Deilou"
+        self.r.text_big(view, title, (WIDTH//2 - self.r.font_big.size(title)[0]//2 + 2, 82 + 2), (0,0,0))
+        self.r.text_big(view, title, (WIDTH//2 - self.r.font_big.size(title)[0]//2, 82), YELLOW)
+
+        options = ["New Game", "Load", "Exit"]
+        self.r.draw_center_menu(options, self.title_index)
+    
+    def title_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.title_index = (self.title_index - 1) % 3
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.title_index = (self.title_index + 1) % 3
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.title_index == 0:  # New Game
+                    self.mode = MODE_TOWN
+                elif self.title_index == 1:  # Load
+                    path = "save.json"
+                    if os.path.exists(path):
+                        self.load(path)
+                        self.mode = MODE_TOWN
+                    else:
+                        self.log.add("No save file found.")
+                else:  # Exit
+                    pygame.event.post(pygame.event.Event(pygame.QUIT))
+            elif event.key == pygame.K_ESCAPE:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
     # --------------- Town ---------------
     def draw_town(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -1058,60 +1110,32 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
         if self.status_phase == 'select':
-            # Show just character names in a centered list
-            options = [m.name for m in self.party.members] or ["(no characters)"]
+            self.r.text_big(view, "Status — Choose Character", (20, 16))
+            options = [f"{i+1:>2}. {m.name} — Lv{m.level} {m.cls}" for i, m in enumerate(self.party.members)] or ["(no characters)"]
+            self.r.draw_center_menu(options)
+            # selected index visual handled by separate render? adjust call:
             self.r.draw_center_menu(options, self.status_index)
             self.r.text_small(view, "Enter: View  Esc: Back", (32, VIEW_H - 28), LIGHT)
         else:
-            # Detail view: two columns, no centered Back menu.
             if not self.party.members:
                 self.status_phase = 'select'
                 return
             m = self.party.members[self.status_index % len(self.party.members)]
             pad_x, pad_y = 16, 12
-            card_w, card_h = 640, 300
-            x = WIDTH // 2 - card_w // 2
-            y = VIEW_H // 2 - card_h // 2
+            card_w, card_h = 600, 260
+            x = WIDTH//2 - card_w//2
+            y = VIEW_H//2 - card_h//2
             rect = pygame.Rect(x, y, card_w, card_h)
             pygame.draw.rect(view, (20, 20, 28), rect)
             pygame.draw.rect(view, YELLOW, rect, 2)
-            # Header
-            self.r.text_big(view, f"{m.name}", (x + 16, y + 14))
-            # Two-column stats
-            col1_x = x + 16
-            col2_x = x + card_w // 2 + 8
-            row_y  = y + 56
-            line_h = 22
-
-            left = [
-                f"Class {m.cls}  Lv {m.level}",
-                f"HP {m.hp}/{m.max_hp}",
-                f"MP {m.mp}/{m.max_mp}",
-                f"AC {m.defense_ac:+}",
-                f"ATK {m.atk_bonus:+}",
-                f"Gold {m.gold}",
-            ]
-            right = [
-                f"STR {m.str_}",
-                f"IQ {m.iq}",
-                f"PIE {m.piety}",
-                f"VIT {m.vit}",
-                f"AGI {m.agi}",
-                f"LCK {m.luck}",
-            ]
-            for i, txt in enumerate(left):
-                self.r.text(view, txt, (col1_x, row_y + i * line_h))
-            for i, txt in enumerate(right):
-                self.r.text(view, txt, (col2_x, row_y + i * line_h))
-
-            # Equipment and items
-            self.r.text(view, f"Weapon ATK +{m.equipment.weapon_atk}   Armor AC {m.equipment.armor_ac:+}", (x + 16, y + card_h - 64))
+            self.r.text_big(view, f"{m.name} — Lv{m.level} {m.cls}", (x + 16, y + 14))
+            self.r.text(view, f"HP {m.hp}/{m.max_hp}   MP {m.mp}/{m.max_mp}", (x + 16, y + 48))
+            self.r.text(view, f"STR {m.str_}  IQ {m.iq}  PIE {m.piety}  VIT {m.vit}  AGI {m.agi}  LCK {m.luck}", (x + 16, y + 72))
+            self.r.text(view, f"AC {m.defense_ac:+}  ATK {m.atk_bonus:+}  Gold {m.gold}", (x + 16, y + 96))
+            self.r.text(view, f"Weapon ATK +{m.equipment.weapon_atk}   Armor AC {m.equipment.armor_ac:+}", (x + 16, y + 120))
             inv = ", ".join(ITEMS_BY_ID.get(iid, {"name": iid})["name"] for iid in m.inventory) or "(no items)"
-            self.r.text(view, f"Items: {inv}", (x + 16, y + card_h - 36))
-
-            # Hint: Enter/Esc return to the character list
-            self.r.text_small(view, "Enter/Esc: Back to list", (32, VIEW_H - 28), LIGHT)
-
+            self.r.text(view, f"Items: {inv}", (x + 16, y + 152))
+            self.r.draw_center_menu(["Back"], 0)
 
     def status_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1664,7 +1688,9 @@ class Game:
                 if event.type == pygame.QUIT:
                     running = False
                 else:
-                    if self.mode == MODE_TOWN:
+                    if self.mode == MODE_TITLE:
+                        self.title_input(event)
+                    elif self.mode == MODE_TOWN:
                         self.town_input(event)
                     elif self.mode == MODE_PARTY:
                         self.party_input(event)
@@ -1694,7 +1720,9 @@ class Game:
             self.update()
 
             self.r.draw_frame()
-            if self.mode == MODE_TOWN:
+            if self.mode == MODE_TITLE:
+                self.draw_title()
+            elif self.mode == MODE_TOWN:
                 self.draw_town()
             elif self.mode == MODE_PARTY:
                 self.draw_party()
