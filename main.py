@@ -404,7 +404,7 @@ class Renderer:
         if not options:
             return
         pad_x, pad_y = 12, 10
-        text_w = max(self.font.size(s)[0] for s in options)
+        text_w = max(self.font.size(s + "  ")[0] for s in options)
         text_h = self.font.get_height()
         w = text_w + pad_x * 2
         h = text_h * len(options) + pad_y * 2
@@ -1112,7 +1112,7 @@ class Game:
         if self.status_phase == 'select':
             self.r.text_big(view, "Status — Choose Character", (20, 16))
             options = [f"{i+1:>2}. {m.name} — Lv{m.level} {m.cls}" for i, m in enumerate(self.party.members)] or ["(no characters)"]
-            self.r.draw_center_menu(options)
+            self.r.draw_center_menu(options, 0)
             # selected index visual handled by separate render? adjust call:
             self.r.draw_center_menu(options, self.status_index)
             self.r.text_small(view, "Enter: View  Esc: Back", (32, VIEW_H - 28), LIGHT)
@@ -1641,7 +1641,7 @@ class Game:
         if b:
             if b.state == 'menu':
                 self.r.draw_center_menu([label for _id, label in b.ui_menu_options], b.ui_menu_index)
-                self.r.text_small(view, "↑/↓ Select  Enter Confirm", (40, VIEW_H - 100), LIGHT)
+                self.r.text_small(view, "^/v Select  Enter Confirm", (40, VIEW_H - 100), LIGHT)
             elif b.state == 'target':
                 options = [b.enemies[i].name for i in range(len(b.enemies)) if b.enemies[i].hp > 0] or ["(no targets)"]
                 self.r.draw_center_menu(options + ["Back"], b.target_menu_index if options else 0)
