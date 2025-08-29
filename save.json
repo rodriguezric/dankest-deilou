@@ -17,7 +17,7 @@
         "max_mp": 0,
         "mp": 0,
         "ac": 10,
-        "exp": 0,
+        "exp": 17,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -42,7 +42,7 @@
         "max_mp": 1,
         "mp": 1,
         "ac": 10,
-        "exp": 0,
+        "exp": 17,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -63,11 +63,11 @@
         "agi": 10,
         "luck": 8,
         "max_hp": 7,
-        "hp": 7,
+        "hp": 6,
         "max_mp": 8,
         "mp": 8,
         "ac": 10,
-        "exp": 0,
+        "exp": 17,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -82,13 +82,13 @@
       0,
       2
     ],
-    "gold": 0,
+    "gold": 40,
     "inventory": []
   },
   "pos": [
     2,
     2
   ],
-  "facing": 1,
+  "facing": 3,
   "level": 0
 }

@@ -490,7 +490,8 @@ class Renderer:
         h = 60
         total = n * w + (n + 1) * gap
         x = (WIDTH - total) // 2 + gap
-        y = 16
+        # Slightly lower enemy windows for better composition
+        y = 28
         rects: Dict[int, pygame.Rect] = {}
         for j, (i, e) in enumerate(draw_list):
             (ox, oy), hit_color = effects.sample("enemy", i, base_color=WHITE)
@@ -977,7 +978,7 @@ class Game:
                 pygame.draw.aalines(overlay, col, False, pts)
         screen.blit(overlay, (0, 0))
 
-        title = "Dankest Deilou"
+        title = "Deilou Yat"
         options = ["New Game", "Load", "Exit"]
 
         # Compute menu height to position title above it while keeping composition centered
@@ -1791,9 +1792,9 @@ class Game:
                     alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
                     if not alive:
                         b.begin_player_turn(); return
-                    if event.key in (pygame.K_UP, pygame.K_k):
+                    if event.key in (pygame.K_LEFT, pygame.K_h):
                         b.target_menu_index = (b.target_menu_index - 1) % len(alive)
-                    elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    elif event.key in (pygame.K_RIGHT, pygame.K_l):
                         b.target_menu_index = (b.target_menu_index + 1) % len(alive)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         actor = b.current_actor()
@@ -1805,19 +1806,16 @@ class Game:
                         if act:
                             b.start_animation(act)
                     elif event.key == pygame.K_ESCAPE:
-                        # go back to appropriate previous menu
-                        if b.target_mode.get('action') == 'attack':
-                            b.state = 'menu'
-                        else:
-                            b.state = 'skillmenu'
+                        # go back to combat menu
+                        b.state = 'menu'
                 else:
                     # party targeting (for heal)
                     alive_gi = [i for i, m in enumerate(self.party.members) if m.alive and m.hp > 0 and i in self.party.active]
                     if not alive_gi:
                         b.begin_player_turn(); return
-                    if event.key in (pygame.K_UP, pygame.K_k):
+                    if event.key in (pygame.K_LEFT, pygame.K_h):
                         b.target_menu_index = (b.target_menu_index - 1) % len(alive_gi)
-                    elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    elif event.key in (pygame.K_RIGHT, pygame.K_l):
                         b.target_menu_index = (b.target_menu_index + 1) % len(alive_gi)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         actor = b.current_actor()
@@ -1826,14 +1824,14 @@ class Game:
                         if act:
                             b.start_animation(act)
                     elif event.key == pygame.K_ESCAPE:
-                        b.state = 'skillmenu'
+                        # go back to combat menu
+                        b.state = 'menu'
             
 
     def draw_battle(self):
         b = self.in_battle
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((12, 12, 18))
-        self.r.text_big(view, "Battle!", (20, 16))
         party_highlight = set()
         party_acting = set()
         enemy_highlight = set()
@@ -1870,17 +1868,13 @@ class Game:
         if b:
             if b.state == 'menu':
                 self.r.draw_center_menu([label for _id, label in b.ui_menu_options], b.ui_menu_index)
-                self.r.text_small(view, "^/v Select  Enter Confirm", (40, VIEW_H - 100), LIGHT)
             elif b.state == 'skillmenu':
                 opts = [label for _id, label in b.skill_options] or ["(No skills)"]
                 opts = opts + ["Back"]
                 self.r.draw_center_menu(opts, b.skill_menu_index)
             elif b.state == 'target':
-                if b.target_mode and b.target_mode.get('side') == 'party':
-                    options = [self.party.members[i].name for i in range(len(self.party.members)) if self.party.members[i].alive and self.party.members[i].hp > 0 and i in self.party.active] or ["(no targets)"]
-                else:
-                    options = [b.enemies[i].name for i in range(len(b.enemies)) if b.enemies[i].hp > 0] or ["(no targets)"]
-                self.r.draw_center_menu(options + ["Back"], b.target_menu_index if options else 0)
+                # No center menu in target selection; use highlights only
+                pass
         now = pygame.time.get_ticks()
         for f in (b.floaters if b else []):
             rect = None
