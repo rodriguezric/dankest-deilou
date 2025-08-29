@@ -61,6 +61,11 @@ MODE_SAVELOAD = "SAVELOAD"
 MODE_PAUSE = "PAUSE"
 MODE_ITEMS = "ITEMS"
 
+# Temple costs
+TEMPLE_HEAL_PARTY_COST = 30
+REVIVE_BASE_COST = 30
+REVIVE_PER_LEVEL = 10
+
 # Map tiles
 T_EMPTY = 0
 T_WALL = 1
@@ -479,9 +484,15 @@ class Renderer:
         dying = dying or {}
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         alive = [(i, e) for i, e in enumerate(enemies) if e.hp > 0]
-        # include dying entries for fade-out
+        # include dying entries for fade-out (keep original index order)
         extra = [(i, enemies[i]) for i in dying.keys() if 0 <= i < len(enemies) and enemies[i].hp <= 0]
-        draw_list = alive + [x for x in extra if x[0] not in [i for i, _ in alive]]
+        # merge without duplicates and sort by original index so defeated enemies
+        # animate in-place rather than being pushed to the end
+        merged = {i: e for i, e in alive}
+        for i, e in extra:
+            if i not in merged:
+                merged[i] = e
+        draw_list = sorted(merged.items(), key=lambda t: t[0])
         if not draw_list:
             return {}
         n = len(draw_list)
@@ -686,11 +697,12 @@ class Battle:
 
     def start_animation(self, action: Dict[str, Any]):
         now = pygame.time.get_ticks()
-        self.anim = {'action': action, 'stage': 0, 't0': now, 'dur': [220, 240, 160]}
+        # Staged timing: windup (actor flashes) -> pre-impact pause -> impact (target animates) -> recover
+        self.anim = {'action': action, 'stage': 0, 't0': now, 'dur': [240, 140, 240, 160]}
         self.state = 'anim'
 
-    def add_floater(self, side: str, index: int, text: str, dur: int = 700):
-        self.floaters.append({'side': side, 'index': index, 'text': text, 'start': pygame.time.get_ticks(), 'dur': dur})
+    def add_floater(self, side: str, index: int, text: str, dur: int = 700, color=WHITE):
+        self.floaters.append({'side': side, 'index': index, 'text': text, 'start': pygame.time.get_ticks(), 'dur': dur, 'color': color})
 
     def update(self):
         now = pygame.time.get_ticks()
@@ -705,21 +717,43 @@ class Battle:
             a = self.anim
             stage = a['stage']
             t = now - a['t0']
-            wind, impact, recover = a['dur']
+            # Support both legacy 3-stage and new 4-stage animations
             act = a['action']
-            if stage == 0 and t >= wind:
-                a['stage'] = 1
-                a['t0'] = now
-                self.resolve_action_impact(act)
-            elif stage == 1 and t >= impact:
-                a['stage'] = 2
-                a['t0'] = now
-            elif stage == 2 and t >= recover:
-                # finish anim -> small pause, then continue
-                self.anim = None
-                self.next_after_anim = {'actor_side': act['actor_side'], 'type': act.get('type'), 'run_success': act.get('success', False)}
-                self.pause_until = now + self.pause_between_ms
-                self.state = 'postpause'
+            if len(a['dur']) == 3:
+                wind, impact, recover = a['dur']
+                if stage == 0 and t >= wind:
+                    a['stage'] = 1
+                    a['t0'] = now
+                    self.resolve_action_impact(act)
+                elif stage == 1 and t >= impact:
+                    a['stage'] = 2
+                    a['t0'] = now
+                elif stage == 2 and t >= recover:
+                    # finish anim -> small pause, then continue
+                    self.anim = None
+                    self.next_after_anim = {'actor_side': act['actor_side'], 'type': act.get('type'), 'run_success': act.get('success', False)}
+                    self.pause_until = now + self.pause_between_ms
+                    self.state = 'postpause'
+            else:
+                wind, pre, impact, recover = a['dur']
+                if stage == 0 and t >= wind:
+                    # windup finished; brief pause before impact
+                    a['stage'] = 1
+                    a['t0'] = now
+                elif stage == 1 and t >= pre:
+                    # now apply the impact (target animates)
+                    a['stage'] = 2
+                    a['t0'] = now
+                    self.resolve_action_impact(act)
+                elif stage == 2 and t >= impact:
+                    a['stage'] = 3
+                    a['t0'] = now
+                elif stage == 3 and t >= recover:
+                    # finish anim -> small pause, then continue
+                    self.anim = None
+                    self.next_after_anim = {'actor_side': act['actor_side'], 'type': act.get('type'), 'run_success': act.get('success', False)}
+                    self.pause_until = now + self.pause_between_ms
+                    self.state = 'postpause'
         elif self.state == 'postpause' and now >= self.pause_until:
             if self.check_end_and_maybe_finish():
                 return
@@ -751,6 +785,8 @@ class Battle:
                     if 0 <= i < len(self.enemies):
                         self.enemies[i].hp -= dmg
                         self.effects.trigger('enemy', i, 300, 7)
+                        # damage floater (enemy)
+                        self.add_floater('enemy', i, str(dmg), 800, WHITE)
                         if self.enemies[i].hp <= 0:
                             self.enemies[i].hp = 0
                             # start defeat animation
@@ -760,6 +796,8 @@ class Battle:
                     if 0 <= gi < len(self.party.members):
                         t = self.party.members[gi]
                         t.hp -= dmg
+                        # damage floater (party)
+                        self.add_floater('party', gi, str(dmg), 800, WHITE)
                         if t.hp <= 0:
                             t.hp = 0
                             t.alive = False
@@ -770,7 +808,7 @@ class Battle:
             else:
                 idx = act['target_index']
                 side = act['target_side']
-                self.add_floater(side, idx, 'MISS', 700)
+                self.add_floater(side, idx, 'MISS', 700, WHITE)
                 self.log.add(act.get('miss_label', 'The attack misses.'))
         elif act['type'] == 'heal':
             gi = act['target_index']
@@ -779,6 +817,8 @@ class Battle:
                 t = self.party.members[gi]
                 before = t.hp
                 t.hp = min(t.max_hp, t.hp + amt)
+                # heal floater (party)
+                self.add_floater('party', gi, str(amt), 800, YELLOW)
                 self.log.add(f"{act.get('actor_name','Priest')} heals {t.name} for {t.hp - before}.")
         elif act['type'] == 'run':
             if act.get('success'):
@@ -928,6 +968,11 @@ class Game:
         self.saveload_index = 0
         # Title screen menu index
         self.title_index = 0
+
+        # Temple UI state
+        self.temple_phase = 'menu'  # 'menu' | 'revive'
+        self.temple_menu_index = 0  # 0 Heal party, 1 Revive member
+        self.temple_revive_index = 0
 
         self.encounter_rate = 0.22
 
@@ -1081,6 +1126,8 @@ class Game:
             self.mode = MODE_TRAINING
         elif ix == 4:
             self.mode = MODE_TEMPLE
+            self.temple_phase = 'menu'
+            self.temple_menu_index = 0
         elif ix == 5:
             self.mode = MODE_SHOP
         elif ix == 6:
@@ -1448,38 +1495,100 @@ class Game:
     def draw_temple(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        self.r.text_big(view, "Temple — Healer", (20, 16))
-        y = 56
-        for i, m in enumerate(self.party.members):
-            self.r.text(view, f"{i+1}. {m.name} HP {m.hp}/{m.max_hp} {'(DOWN)' if not m.alive else ''}", (32, y))
-            y += 18
-        self.r.text_small(view, "1‑9 heal (10g) / revive (50g). Esc: Back", (32, y + 4), LIGHT)
+        self.r.text_big(view, "Temple", (20, 16))
+        any_dead = any(not m.alive for m in self.party.members)
+        if self.temple_phase == 'menu':
+            opts = ["Heal Party", "Revive Member"]
+            enabled = [True, any_dead]
+            y = 64
+            for i, opt in enumerate(opts):
+                is_sel = (i == self.temple_menu_index)
+                col = YELLOW if is_sel and enabled[i] else (GRAY if not enabled[i] else WHITE)
+                prefix = "> " if is_sel else "  "
+                self.r.text(view, f"{prefix}{opt}", (32, y), col)
+                y += 24
+            self.r.text_small(view, f"Gold: {self.party.gold}", (WIDTH - 140, 20), YELLOW)
+            if self.temple_menu_index == 0:
+                self.r.text_small(view, f"Cost: {TEMPLE_HEAL_PARTY_COST}g — heals all living members", (32, y + 6), LIGHT)
+            else:
+                self.r.text_small(view, f"Select to choose a fallen ally to revive", (32, y + 6), LIGHT)
+        else:
+            # Revive list: show dead members with per-level cost
+            dead = [(i, m) for i, m in enumerate(self.party.members) if not m.alive]
+            options = [f"{m.name} — Lv{m.level} ({REVIVE_BASE_COST + REVIVE_PER_LEVEL * m.level}g)" for _, m in dead] or ["(no one to revive)"]
+            # Show a Back item
+            opts = options + ["Back"]
+            idx = min(self.temple_revive_index, len(opts) - 1)
+            self.r.draw_center_menu(opts, idx)
+            self.r.text_small(view, f"Gold: {self.party.gold}", (WIDTH - 140, 20), YELLOW)
 
     def temple_input(self, event):
         if event.type == pygame.KEYDOWN:
-            if pygame.K_1 <= event.key <= pygame.K_9:
-                ix = event.key - pygame.K_1
-                if ix < len(self.party.members):
-                    m = self.party.members[ix]
-                    if not m.alive:
-                        cost = 50
+            if self.temple_phase == 'menu':
+                any_dead = any(not m.alive for m in self.party.members)
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.temple_menu_index = (self.temple_menu_index - 1) % 2
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.temple_menu_index = (self.temple_menu_index + 1) % 2
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.temple_menu_index == 0:
+                        # Heal party for fixed cost (alive members only)
+                        living = [m for m in self.party.members if m.alive]
+                        if not living:
+                            self.log.add("No one to heal.")
+                            return
+                        need = any(m.hp < m.max_hp for m in living)
+                        if not need:
+                            self.log.add("Everyone is already at full HP.")
+                            return
+                        if self.party.gold >= TEMPLE_HEAL_PARTY_COST:
+                            self.party.gold -= TEMPLE_HEAL_PARTY_COST
+                            for m in living:
+                                m.hp = m.max_hp
+                            self.log.add("The party is fully healed.")
+                        else:
+                            self.log.add("Not enough gold to heal party.")
+                    else:
+                        if any_dead:
+                            self.temple_phase = 'revive'
+                            self.temple_revive_index = 0
+                        else:
+                            # Disabled: no action when no one is dead
+                            pass
+                elif event.key == pygame.K_ESCAPE:
+                    self.mode = MODE_TOWN
+            else:
+                # revive list
+                dead = [(i, m) for i, m in enumerate(self.party.members) if not m.alive]
+                n = max(1, len(dead) + 1)  # +1 for Back
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.temple_revive_index = (self.temple_revive_index - 1) % n
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.temple_revive_index = (self.temple_revive_index + 1) % n
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.temple_revive_index == len(dead):
+                        # Back
+                        self.temple_phase = 'menu'
+                        self.temple_menu_index = 0
+                    else:
+                        gi, m = dead[self.temple_revive_index]
+                        cost = REVIVE_BASE_COST + REVIVE_PER_LEVEL * m.level
                         if self.party.gold >= cost:
                             self.party.gold -= cost
                             m.alive = True
                             m.hp = max(1, m.max_hp // 2)
                             self.log.add(f"{m.name} is revived.")
+                            # After revive, recompute dead list and adjust index
+                            dead = [(i, mm) for i, mm in enumerate(self.party.members) if not mm.alive]
+                            if not dead:
+                                self.temple_phase = 'menu'
+                                self.temple_menu_index = 0
+                            else:
+                                self.temple_revive_index = min(self.temple_revive_index, len(dead) - 1)
                         else:
                             self.log.add("Not enough gold to revive.")
-                    else:
-                        cost = 10
-                        if self.party.gold >= cost:
-                            self.party.gold -= cost
-                            m.hp = m.max_hp
-                            self.log.add(f"{m.name} healed to full.")
-                        else:
-                            self.log.add("Not enough gold to heal.")
-            elif event.key == pygame.K_ESCAPE:
-                self.mode = MODE_TOWN
+                elif event.key == pygame.K_ESCAPE:
+                    self.temple_phase = 'menu'
 
     def draw_training(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -1752,6 +1861,9 @@ class Game:
                         if not alive_enemy_indices:
                             b.begin_player_turn()
                     elif chosen_id == 'skill':
+                        # Only enter skill menu if there are skills available
+                        if not b.skill_options:
+                            return
                         # open skill submenu
                         b.state = 'skillmenu'
                         b.skill_menu_index = 0
@@ -1809,8 +1921,10 @@ class Game:
                         # go back to combat menu
                         b.state = 'menu'
                 else:
-                    # party targeting (for heal)
-                    alive_gi = [i for i, m in enumerate(self.party.members) if m.alive and m.hp > 0 and i in self.party.active]
+                    # party targeting (for heal) — follow on-screen order (self.party.active)
+                    alive_gi = [i for i in self.party.active
+                                if 0 <= i < len(self.party.members)
+                                and self.party.members[i].alive and self.party.members[i].hp > 0]
                     if not alive_gi:
                         b.begin_player_turn(); return
                     if event.key in (pygame.K_LEFT, pygame.K_h):
@@ -1843,7 +1957,10 @@ class Game:
                     party_highlight.add(gi)
             if b.state == 'target':
                 if b.target_mode and b.target_mode.get('side') == 'party':
-                    alive_gi = [i for i, m in enumerate(self.party.members) if m.alive and m.hp > 0 and i in self.party.active]
+                    # Highlight using on-screen order
+                    alive_gi = [i for i in self.party.active
+                                if 0 <= i < len(self.party.members)
+                                and self.party.members[i].alive and self.party.members[i].hp > 0]
                     if alive_gi:
                         party_highlight.add(alive_gi[b.target_menu_index])
                 else:
@@ -1867,7 +1984,30 @@ class Game:
         party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting)
         if b:
             if b.state == 'menu':
-                self.r.draw_center_menu([label for _id, label in b.ui_menu_options], b.ui_menu_index)
+                # Draw combat menu with disabled state for Skill when unavailable
+                labels = [label for _id, label in b.ui_menu_options]
+                disabled_idx = 1 if len(b.ui_menu_options) > 1 and not b.skill_options else -1
+                # Render like draw_center_menu but allow grayed option
+                options = labels
+                if options:
+                    pad_x, pad_y = 12, 10
+                    text_w = max(self.r.font.size(s + "  ")[0] for s in options)
+                    text_h = self.r.font.get_height()
+                    w = text_w + pad_x * 2
+                    h = text_h * len(options) + pad_y * 2
+                    x = WIDTH // 2 - w // 2
+                    y = VIEW_H // 2 - h // 2
+                    rect = pygame.Rect(x, y, w, h)
+                    pygame.draw.rect(view, (16, 16, 20), rect)
+                    pygame.draw.rect(view, YELLOW, rect, 2)
+                    cy = y + pad_y
+                    for i, s in enumerate(options):
+                        is_sel = (i == b.ui_menu_index)
+                        is_disabled = (i == disabled_idx)
+                        color = GRAY if is_disabled else (YELLOW if is_sel else WHITE)
+                        prefix = "> " if is_sel else "  "
+                        self.r.text(view, prefix + s, (x + pad_x, cy), color)
+                        cy += text_h
             elif b.state == 'skillmenu':
                 opts = [label for _id, label in b.skill_options] or ["(No skills)"]
                 opts = opts + ["Back"]
@@ -1886,9 +2026,15 @@ class Game:
                 continue
             t = now - f['start']
             p = max(0.0, min(1.0, t / f['dur']))
-            y = rect.top - 10 - int(20 * p)
+            # Lower starting positions inside the panel
+            base = rect.top + 26
+            # Start MISS even lower for readability
+            if str(f.get('text','')).upper() == 'MISS':
+                base = rect.top + 34
+            y = base - int(20 * p)
             alpha = max(0, 255 - int(255 * p))
-            surf = self.r.font_big.render(f['text'], True, WHITE)
+            color = f.get('color', WHITE)
+            surf = self.r.font_big.render(str(f['text']), True, color)
             surf.set_alpha(alpha)
             view.blit(surf, (rect.centerx - surf.get_width() // 2, y))
 
