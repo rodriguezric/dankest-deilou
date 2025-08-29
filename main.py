@@ -1046,6 +1046,7 @@ class Game:
             "Trader (Shop)",
             "Enter the Labyrinth",
             "Save / Load",
+            "Exit to Title",
         ]
         y = 56
         for i, opt in enumerate(options):
@@ -1057,12 +1058,12 @@ class Game:
     def town_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.menu_index = (self.menu_index - 1) % 8
+                self.menu_index = (self.menu_index - 1) % 9
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.menu_index = (self.menu_index + 1) % 8
+                self.menu_index = (self.menu_index + 1) % 9
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self.select_town_option(self.menu_index)
-            elif pygame.K_1 <= event.key <= pygame.K_8:
+            elif pygame.K_1 <= event.key <= pygame.K_9:
                 self.select_town_option(event.key - pygame.K_1)
 
     def select_town_option(self, ix):
@@ -1095,6 +1096,10 @@ class Game:
                 self.log.add("You descend into the Labyrinth...")
         elif ix == 7:
             self.mode = MODE_SAVELOAD
+        elif ix == 8:
+            # Exit to title screen
+            self.title_index = 0
+            self.mode = MODE_TITLE
 
     # --------------- Party / Tavern ---------------
     def draw_party(self):
