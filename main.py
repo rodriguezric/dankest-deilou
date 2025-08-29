@@ -230,6 +230,7 @@ class Enemy:
     exp: int
     gold_low: int
     gold_high: int
+    agi: int = 8
 
     @staticmethod
     def random_enemy():
@@ -244,6 +245,7 @@ class Enemy:
             exp=e["exp"],
             gold_low=e["gold"][0],
             gold_high=e["gold"][1],
+            agi=random.randint(5, 12),
         )
 
 
@@ -590,7 +592,9 @@ class Battle:
         self.log = log
         self.effects = effects
         self.enemies: List[Enemy] = []
-        self.turn_index = 0
+        self.turn_index = 0  # kept for compatibility in some calls
+        self.turn_order: List[Tuple[str, int]] = []  # list of (side, index) where index is party global index or enemy index
+        self.turn_pos: int = 0
         self.battle_over = False
         self.result: Optional[str] = None
 
@@ -602,7 +606,7 @@ class Battle:
         self.skill_menu_index: int = 0
         self.skill_options: List[Tuple[str, str]] = []  # per-actor skills
         self.anim: Optional[Dict[str, Any]] = None
-        self.enemy_queue: List[Dict[str, Any]] = []
+        self.enemy_queue: List[Dict[str, Any]] = []  # no longer used for rounds; kept for compatibility
         self.floaters: List[Dict[str, Any]] = []  # {side:'party'|'enemy', index:int, text:str, start:int, dur:int}
         self.pause_between_ms: int = 180
         self.pause_until: int = 0
@@ -620,25 +624,123 @@ class Battle:
         count = random.randint(1, 3)
         self.enemies = [Enemy.random_enemy() for _ in range(count)]
         self.log.add(f"Ambushed by {', '.join(e.name for e in self.enemies)}!")
-        self.turn_index = 0
-        self.begin_player_turn()
+        self.build_turn_order()
+        self.turn_pos = 0
+        self.next_turn()
+
+    def build_turn_order(self):
+        # Build mixed initiative order by AGI (descending). Ties: party before enemy, then index.
+        party_tokens = [("party", i, self.party.members[i].agi) for i in self.party.active if 0 <= i < len(self.party.members) and self.party.members[i].alive and self.party.members[i].hp > 0]
+        enemy_tokens = [("enemy", i, e.agi) for i, e in enumerate(self.enemies) if e.hp > 0]
+        combined = party_tokens + enemy_tokens
+        combined.sort(key=lambda t: (-t[2], 0 if t[0] == 'party' else 1, t[1]))
+        self.turn_order = [(side, ix) for side, ix, _agi in combined]
+        if not self.turn_order:
+            self.turn_pos = 0
+
+    def next_turn(self):
+        # Check victory/defeat
+        if not self.enemy_alive():
+            self.finish_victory(); return
+        if not self.party.any_active_alive():
+            self.finish_defeat(); return
+        # Ensure current token is valid; if not, rebuild and reset
+        if not self.turn_order:
+            self.build_turn_order()
+            self.turn_pos = 0
+        if self.turn_pos >= len(self.turn_order):
+            self.build_turn_order()
+            self.turn_pos = 0
+        # Skip invalid tokens (dead/removed) and advance
+        safety = 0
+        while safety < 10 and self.turn_order:
+            side, ix = self.turn_order[self.turn_pos]
+            if side == 'party':
+                if 0 <= ix < len(self.party.members) and self.party.members[ix].alive and self.party.members[ix].hp > 0 and ix in self.party.active:
+                    break
+            else:
+                if 0 <= ix < len(self.enemies) and self.enemies[ix].hp > 0:
+                    break
+            # invalid -> advance
+            self.turn_pos = (self.turn_pos + 1) % max(1, len(self.turn_order))
+            safety += 1
+        if not self.turn_order:
+            self.build_turn_order()
+            self.turn_pos = 0
+        # Act based on token
+        side, ix = self.turn_order[self.turn_pos]
+        if side == 'party':
+            self.state = 'menu'
+            self.ui_menu_index = 0
+            self.ui_menu_options = []
+            a = self.current_actor()
+            if not a:
+                # if no current actor, advance turn
+                self.advance_turn()
+                return
+            self.ui_menu_options.append(('attack', 'Attack'))
+            # Build skills list for current actor
+            skills: List[Tuple[str, str]] = []
+            if a.cls == 'Mage':
+                skills.append(('spell', 'Spark'))
+            if a.cls == 'Priest':
+                skills.append(('heal', 'Heal'))
+            # Filter by resource availability
+            filt: List[Tuple[str, str]] = []
+            for sid, label in skills:
+                if sid in ('spell', 'heal') and a.mp <= 0:
+                    continue
+                filt.append((sid, label))
+            self.skill_options = filt
+            self.ui_menu_options.append(('skill', 'Skill'))
+            self.ui_menu_options.append(('run', 'Run'))
+            self.skill_menu_index = 0
+        else:
+            # Enemy acts automatically (basic attack random target)
+            e = self.enemies[ix]
+            targets = self.party.alive_active_members()
+            if not targets:
+                self.finish_defeat(); return
+            t = random.choice(targets)
+            gi = self.party.members.index(t)
+            hit = random.random() < 0.65
+            dmg = random.randint(e.atk_low, e.atk_high)
+            act = {
+                'type': 'attack',
+                'actor_side': 'enemy', 'actor_index': ix,
+                'target_side': 'party', 'target_index': gi,
+                'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                'miss_label': f"{e.name} misses {t.name}.",
+            }
+            self.start_animation(act)
+
+    def advance_turn(self):
+        # Move to next token and trigger next_turn
+        if self.turn_order:
+            self.turn_pos = (self.turn_pos + 1) % len(self.turn_order)
+        self.next_turn()
 
     def current_actor(self) -> Optional[Character]:
-        alive = self.party.alive_active_members()
-        if not alive:
+        # Current token must be a party member
+        if not self.turn_order:
             return None
-        if self.turn_index >= len(alive):
-            self.turn_index = 0
-        return alive[self.turn_index]
+        if self.turn_pos >= len(self.turn_order):
+            return None
+        side, gi = self.turn_order[self.turn_pos]
+        if side != 'party':
+            return None
+        if 0 <= gi < len(self.party.members):
+            return self.party.members[gi]
+        return None
 
     def current_actor_global_ix(self) -> Optional[int]:
-        actor = self.current_actor()
-        if not actor:
+        # Using token's stored index
+        if not self.turn_order:
             return None
-        try:
-            return self.party.members.index(actor)
-        except ValueError:
+        if self.turn_pos >= len(self.turn_order):
             return None
+        side, gi = self.turn_order[self.turn_pos]
+        return gi if side == 'party' else None
 
     def enemy_alive(self) -> bool:
         return any(e.hp > 0 for e in self.enemies)
@@ -676,24 +778,8 @@ class Battle:
         self.skill_menu_index = 0
 
     def queue_enemy_round(self):
+        # Deprecated in mixed initiative; kept for compatibility
         self.enemy_queue = []
-        for i, e in enumerate(self.enemies):
-            if e.hp <= 0:
-                continue
-            targets = self.party.alive_active_members()
-            if not targets:
-                break
-            t = random.choice(targets)
-            gi = self.party.members.index(t)
-            hit = random.random() < 0.65
-            dmg = random.randint(e.atk_low, e.atk_high)
-            self.enemy_queue.append({
-                'type': 'attack',
-                'actor_side': 'enemy', 'actor_index': i,
-                'target_side': 'party', 'target_index': gi,
-                'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
-                'miss_label': f"{e.name} misses {t.name}.",
-            })
 
     def start_animation(self, action: Dict[str, Any]):
         now = pygame.time.get_ticks()
@@ -757,24 +843,10 @@ class Battle:
         elif self.state == 'postpause' and now >= self.pause_until:
             if self.check_end_and_maybe_finish():
                 return
+            # Mixed initiative: advance to next token
             na = self.next_after_anim or {}
-            if na.get('actor_side') == 'party':
-                if na.get('type') == 'run' and na.get('run_success'):
-                    return
-                self.turn_index += 1
-                if self.turn_index >= len(self.party.alive_active_members()):
-                    self.turn_index = 0
-                    self.queue_enemy_round()
-                    if self.enemy_queue:
-                        self.start_animation(self.enemy_queue.pop(0))
-                        return
-                self.begin_player_turn()
-            else:  # enemy acted
-                if self.enemy_queue:
-                    self.start_animation(self.enemy_queue.pop(0))
-                else:
-                    self.turn_index = 0
-                    self.begin_player_turn()
+            # If player successfully ran, battle ends (handled earlier). Otherwise continue.
+            self.advance_turn()
 
     def resolve_action_impact(self, act: Dict[str, Any]):
         if act['type'] in ('attack', 'spell'):
@@ -1982,6 +2054,30 @@ class Game:
                 dying_prog[i] = p
         enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog) if b else {}
         party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting)
+        # Turn order panel on the left
+        if b and b.turn_order:
+            x0, y0 = 12, 18
+            # Background panel
+            panel_w = 180
+            lines = min(8, len(b.turn_order))
+            panel_h = 18 + lines * 16
+            pygame.draw.rect(view, (16, 16, 20), pygame.Rect(x0 - 8, y0 - 8, panel_w, panel_h))
+            pygame.draw.rect(view, YELLOW, pygame.Rect(x0 - 8, y0 - 8, panel_w, panel_h), 1)
+            self.r.text_small(view, "Turn Order", (x0, y0 - 2), LIGHT)
+            y = y0 + 14
+            for off in range(lines):
+                pos = (b.turn_pos + off) % len(b.turn_order)
+                side, ix = b.turn_order[pos]
+                if side == 'party' and 0 <= ix < len(self.party.members):
+                    label = self.party.members[ix].name
+                elif side == 'enemy' and 0 <= ix < len(b.enemies):
+                    label = b.enemies[ix].name
+                else:
+                    label = "?"
+                pre = "> " if off == 0 else "  "
+                col = YELLOW if off == 0 else WHITE
+                self.r.text_small(view, pre + label, (x0, y), col)
+                y += 16
         if b:
             if b.state == 'menu':
                 # Draw combat menu with disabled state for Skill when unavailable
