@@ -1106,6 +1106,13 @@ class Game:
         self.facing = 1
         self.effects = HitEffects()
         self.in_battle: Optional[Battle] = None
+        # Subtle battle background ripples (centers and phase)
+        self.ripple_centers: List[Tuple[int, int]] = [
+            (WIDTH // 2, VIEW_H // 3),
+            (WIDTH // 3, VIEW_H * 2 // 3),
+            (WIDTH * 2 // 3, VIEW_H // 2),
+        ]
+        self.ripple_phase: float = 0.0
 
         # Data
         self.items_list: List[Dict[str, Any]] = []
@@ -1595,7 +1602,13 @@ class Game:
                 elif event.key == pygame.K_ESCAPE:
                     self.mode = self.return_mode
             else:
-                if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
+                if event.key in (pygame.K_LEFT, pygame.K_h):
+                    n = max(1, len(self.party.members))
+                    self.status_index = (self.status_index - 1) % n
+                elif event.key in (pygame.K_RIGHT, pygame.K_l):
+                    n = max(1, len(self.party.members))
+                    self.status_index = (self.status_index + 1) % n
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
                     self.status_phase = 'select'
                     if self.return_mode != MODE_STATUS:
                         self.mode = self.return_mode
@@ -2546,6 +2559,8 @@ class Game:
         b = self.in_battle
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((12, 12, 18))
+        # Background: subtle ripple rings (like water drips)
+        self.draw_battle_ripples(view)
         party_highlight = set()
         party_acting = set()
         enemy_highlight = set()
@@ -2738,6 +2753,28 @@ class Game:
                 surf = self.r.font_big.render(str(f.get('text', '')), True, color)
                 surf.set_alpha(alpha)
                 view.blit(surf, (rect.centerx - surf.get_width() // 2, y))
+
+    def draw_battle_ripples(self, surf: pygame.Surface):
+        # Draw a few faint, animated rings that expand/contract subtly.
+        now = pygame.time.get_ticks() / 1000.0
+        # Create a transparent surface for additive-like layering
+        overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        # Parameters
+        base_radius = 28
+        ring_gap = 34
+        speed = 0.85
+        amp = 10
+        color = (120, 140, 220, 22)  # soft bluish alpha
+        for cx, cy in self.ripple_centers:
+            # draw 3 rings per center
+            for k in range(3):
+                # phase-shift each ring
+                r = base_radius + k * ring_gap + int(amp * (1.0 + math.sin(now * speed + k * 1.8)) * 0.5)
+                # Outer circle (thin)
+                pygame.draw.circle(overlay, color, (cx, cy), max(2, r), 1)
+        # Very faint global fade to keep it subtle
+        overlay.set_alpha(90)
+        surf.blit(overlay, (0, 0))
 
     # --------------- Victory Screen ---------------
     def draw_victory(self):
