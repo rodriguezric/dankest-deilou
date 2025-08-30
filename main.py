@@ -1159,7 +1159,7 @@ class Game:
                 pygame.draw.aalines(overlay, col, False, pts)
         screen.blit(overlay, (0, 0))
 
-        title = "Deilou Yat"
+        title = "Dankest Deilou"
         options = ["New Game", "Load", "Exit"]
 
         # Compute menu height to position title above it while keeping composition centered
