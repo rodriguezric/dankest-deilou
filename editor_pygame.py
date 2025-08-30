@@ -128,6 +128,10 @@ class Editor:
         self.input_active = False
         self.input_prompt = ''
         self.input_text = ''
+        self.input_mode = 'text'  # 'text' or 'monster'
+        self.input_suggestions: List[Tuple[str, str]] = []  # (id, display)
+        self.suggestion_index: int = -1
+        self.suggestion_rects: List[pygame.Rect] = []
         # UI state
         self.tool_rects: List[Tuple[pygame.Rect, int]] = []
         self.btn_file_rect = pygame.Rect(0,0,0,0)
@@ -295,6 +299,18 @@ class Editor:
             pygame.draw.rect(self.screen, YELLOW, rect, 2)
             self.text(self.input_prompt, (rx+16, ry+18))
             self.text(self.input_text + '_', (rx+16, ry+58), YELLOW)
+            # If in monster input mode, show suggestions below
+            if self.input_mode == 'monster' and self.input_suggestions:
+                sy = ry + 84
+                self.suggestion_rects = []
+                for i, (_id, disp) in enumerate(self.input_suggestions[:6]):
+                    r = pygame.Rect(rx+16, sy, box_w-32, 22)
+                    sel = (i == self.suggestion_index)
+                    pygame.draw.rect(self.screen, (60,60,80) if sel else (40,40,48), r)
+                    pygame.draw.rect(self.screen, YELLOW if sel else WHITE, r, 1)
+                    self.text_small(disp, (r.x+8, r.y+4), YELLOW if sel else WHITE)
+                    self.suggestion_rects.append(r)
+                    sy += 24
 
         # File menu overlay
         if self.file_menu and not self.input_active:
@@ -320,19 +336,22 @@ class Editor:
             pygame.draw.rect(self.screen, (20,20,26), box); pygame.draw.rect(self.screen, YELLOW, box, 2)
             x,y=box.x+16, box.y+16
             self.text('Encounters', (x,y), YELLOW); y+=26
-            mons_set=set(self.doc.encounters.get('monsters', []))
+            # Only list monsters currently available on the level
+            curr = self.doc.encounters.get('monsters', [])
+            id_to_name = {m.get('id'): m.get('name') for m in self.monsters if isinstance(m, dict)}
             self.enc_opt_rects=[]
-            for i,m in enumerate(self.monsters):
+            self.text_small('Available monsters on this level:', (x, y), WHITE); y += 20
+            for mid in curr:
                 r=pygame.Rect(x,y, box.w-32, 22)
-                on = m.get('id') in mons_set
-                pygame.draw.rect(self.screen, (60,60,72) if on else (40,40,48), r); pygame.draw.rect(self.screen, WHITE, r,1)
-                self.text_small(f"{m.get('id')} - {m.get('name')}", (r.x+8,r.y+4), YELLOW if on else WHITE)
-                self.enc_opt_rects.append((r,m.get('id'))); y+=24
-                if y> box.bottom-100: break
+                pygame.draw.rect(self.screen, (60,60,72), r); pygame.draw.rect(self.screen, WHITE, r,1)
+                name = id_to_name.get(mid, mid)
+                self.text_small(f"{mid} - {name} (click to remove)", (r.x+8,r.y+4), YELLOW)
+                self.enc_opt_rects.append((r, mid)); y+=24
+                if y> box.bottom-140: break
             y=box.bottom-100
             g=self.doc.encounters.get('group',[1,3])
             self.text_small(f"Group min: {g[0]}  max: {g[1]}", (x,y), WHITE); y+=24
-            btns=[('Min -','min-'),('Min +','min+'),('Max -','max-'),('Max +','max+'),('Close','close')]
+            btns=[('Min -','min-'),('Min +','min+'),('Max -','max-'),('Max +','max+'),('Add...','add'),('Close','close')]
             self.enc_btn_rects=[]
             bx=x
             for label,_id in btns:
@@ -383,6 +402,109 @@ class Editor:
                         ch = event.unicode
                         if ch and ch.isprintable():
                             self.input_text += ch
+            self.draw()
+        return None
+
+    def handle_add_monster(self):
+        mid = self.read_monster_id_input()
+        if mid:
+            # Validate against known monsters
+            ids = [m.get('id') for m in self.monsters if isinstance(m, dict)]
+            if mid not in ids:
+                # Try unique prefix resolution
+                matches = [i for i in ids if str(i).lower().startswith(mid.lower())]
+                if len(matches) == 1:
+                    mid = matches[0]
+                else:
+                    self.status = 'Unknown or ambiguous monster id'
+                    return
+            mons = self.doc.encounters.get('monsters', [])
+            if mid not in mons:
+                mons.append(mid)
+                self.doc.encounters['monsters'] = mons
+                self.status = f'Added monster {mid}'
+
+    def read_monster_id_input(self) -> Optional[str]:
+        # Prompt user with tab-completion and selection list
+        self.input_active = True
+        self.input_prompt = 'Add monster id:'
+        self.input_text = ''
+        self.input_mode = 'monster'
+        self.input_suggestions = []
+        self.suggestion_index = -1
+
+        def all_ids():
+            return [str(m.get('id')) for m in self.monsters if isinstance(m, dict) and m.get('id')]
+
+        def find_matches(prefix: str) -> List[Tuple[str, str]]:
+            ids = all_ids()
+            pref = prefix.lower()
+            matches = [i for i in ids if i.lower().startswith(pref)] if pref else ids
+            # Pair with name for display
+            id_to_name = {m.get('id'): m.get('name') for m in self.monsters if isinstance(m, dict)}
+            return [(i, f"{i} - {id_to_name.get(i, '')}") for i in matches]
+
+        while self.input_active:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.input_mode == 'monster' and self.input_suggestions and event.button == 1:
+                        mx, my = event.pos
+                        for idx, r in enumerate(self.suggestion_rects):
+                            if r.collidepoint(mx, my):
+                                sel_id = self.input_suggestions[idx][0]
+                                self.input_active = False
+                                self.input_mode = 'text'
+                                self.input_suggestions = []
+                                self.suggestion_index = -1
+                                return sel_id
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return None
+                    elif event.key == pygame.K_RETURN:
+                        text = self.input_text.strip()
+                        if self.input_suggestions and 0 <= self.suggestion_index < len(self.input_suggestions):
+                            text = self.input_suggestions[self.suggestion_index][0]
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return text if text else None
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                        # Update suggestions if visible
+                        if self.input_mode == 'monster':
+                            self.input_suggestions = find_matches(self.input_text)
+                            self.suggestion_index = 0 if self.input_suggestions else -1
+                    elif event.key == pygame.K_TAB:
+                        # Show suggestions by prefix
+                        matches = find_matches(self.input_text)
+                        if len(matches) == 1:
+                            self.input_text = matches[0][0]
+                            self.input_suggestions = []
+                            self.suggestion_index = -1
+                        elif len(matches) > 1:
+                            self.input_suggestions = matches
+                            self.suggestion_index = 0
+                    elif event.key in (pygame.K_UP, pygame.K_DOWN):
+                        if self.input_suggestions:
+                            if event.key == pygame.K_UP:
+                                self.suggestion_index = (self.suggestion_index - 1) % len(self.input_suggestions)
+                            else:
+                                self.suggestion_index = (self.suggestion_index + 1) % len(self.input_suggestions)
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            self.input_text += ch
+                            # If suggestions are currently shown, refresh them
+                            if self.input_mode == 'monster':
+                                self.input_suggestions = find_matches(self.input_text)
+                                self.suggestion_index = 0 if self.input_suggestions else -1
             self.draw()
         return None
 
@@ -459,8 +581,8 @@ class Editor:
                         for r, mid in self.enc_opt_rects:
                             if r.collidepoint(mx,my):
                                 mons=self.doc.encounters.get('monsters', [])
-                                if mid in mons: mons.remove(mid)
-                                else: mons.append(mid)
+                                if mid in mons:
+                                    mons.remove(mid)
                                 self.doc.encounters['monsters']=mons
                                 break
                         for r,_id in self.enc_btn_rects:
@@ -470,6 +592,8 @@ class Editor:
                                 elif _id=='min+': g[0]=min(g[1], g[0]+1)
                                 elif _id=='max-': g[1]=max(g[0], g[1]-1)
                                 elif _id=='max+': g[1]=min(9, g[1]+1)
+                                elif _id=='add':
+                                    self.handle_add_monster()
                                 elif _id=='close': self.enc_menu=False
                                 self.doc.encounters['group']=g
                                 break
