@@ -1895,17 +1895,25 @@ class Game:
         view.fill((18, 18, 24))
         self.r.text_big(view, "Training Grounds", (20, 16))
         y = 56
-        self.r.text_small(view, "Each level costs 100 EXP. Press number to level up.", (32, y)); y += 18
-        for i, m in enumerate(self.party.members):
-            self.r.text(view, f"{i+1}. {m.name} Lv{m.level} EXP {m.exp}", (32, y)); y += 18
-        self.r.text_small(view, "Esc: Back", (32, y + 4), LIGHT)
+        self.r.text_small(view, "Each level costs 100 EXP.", (32, y)); y += 18
+        options = [f"{m.name} — Lv{m.level}  EXP {m.exp}" for m in self.party.members] or ["(no characters)"]
+        if not hasattr(self, 'training_index'):
+            self.training_index = 0
+        self.training_index = self.training_index % max(1, len(options))
+        self.r.draw_center_menu(options + ["Back"], self.training_index)
 
     def training_input(self, event):
         if event.type == pygame.KEYDOWN:
-            if pygame.K_1 <= event.key <= pygame.K_9:
-                ix = event.key - pygame.K_1
-                if ix < len(self.party.members):
-                    m = self.party.members[ix]
+            n = max(1, len(self.party.members) + 1)
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.training_index = (self.training_index - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.training_index = (self.training_index + 1) % n
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.training_index == len(self.party.members):
+                    self.mode = MODE_TOWN
+                else:
+                    m = self.party.members[self.training_index]
                     if m.exp >= 100:
                         m.exp -= 100
                         m.level += 1
@@ -1918,6 +1926,8 @@ class Game:
                         self.log.add(f"{m.name} reached Lv{m.level}! +{gain} HP")
                     else:
                         self.log.add("Not enough EXP.")
+            elif event.key == pygame.K_ESCAPE:
+                self.mode = MODE_TOWN
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
 
