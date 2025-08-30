@@ -13,11 +13,11 @@
         "agi": 7,
         "luck": 10,
         "max_hp": 8,
-        "hp": 8,
+        "hp": 4,
         "max_mp": 0,
         "mp": 0,
         "ac": 10,
-        "exp": 63,
+        "exp": 107,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -42,11 +42,11 @@
         "agi": 13,
         "luck": 9,
         "max_hp": 12,
-        "hp": 10,
+        "hp": 12,
         "max_mp": 1,
         "mp": 1,
         "ac": 10,
-        "exp": 63,
+        "exp": 107,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -71,11 +71,11 @@
         "agi": 10,
         "luck": 8,
         "max_hp": 7,
-        "hp": 6,
+        "hp": 7,
         "max_mp": 8,
-        "mp": 3,
+        "mp": 1,
         "ac": 10,
-        "exp": 63,
+        "exp": 107,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -94,7 +94,7 @@
       0,
       2
     ],
-    "gold": 26,
+    "gold": 109,
     "inventory": []
   },
   "pos": [

@@ -464,9 +464,10 @@ class Renderer:
             cy += text_h
 
     # ---- Combat HUDs ----
-    def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None) -> Dict[int, pygame.Rect]:
+    def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None, offsets: Dict[int, int] = None) -> Dict[int, pygame.Rect]:
         highlight = highlight or set()
         acting = acting or set()
+        offsets = offsets or {}
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         members = party.active_members()
         if not members:
@@ -493,7 +494,8 @@ class Renderer:
                 elif gi in highlight:
                     border_col = YELLOW
             rx = x + i * (w + gap) + ox
-            ry = y + oy
+            # Apply optional lunge offset (negative moves up)
+            ry = y + oy + int(offsets.get(gi, 0))
             rect = pygame.Rect(rx, ry, w, h)
             pygame.draw.rect(view, (20, 20, 28), rect)
             pygame.draw.rect(view, border_col, rect, 2)
@@ -504,10 +506,11 @@ class Renderer:
             rects[gi] = rect
         return rects
 
-    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None, dying: Dict[int, float] = None) -> Dict[int, pygame.Rect]:
+    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None, dying: Dict[int, float] = None, offsets: Dict[int, int] = None) -> Dict[int, pygame.Rect]:
         highlight = highlight or set()
         acting = acting or set()
         dying = dying or {}
+        offsets = offsets or {}
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         alive = [(i, e) for i, e in enumerate(enemies) if e.hp > 0]
         # include dying entries for fade-out (keep original index order)
@@ -540,7 +543,8 @@ class Renderer:
                 elif i in highlight:
                     border_col = YELLOW
             rx = x + j * (w + gap) + ox
-            ry = y + oy
+            # Apply optional lunge offset (positive moves down)
+            ry = y + oy + int(offsets.get(i, 0))
             rect = pygame.Rect(rx, ry, w, h)
             # draw to a temp surface if fading
             fade_p = dying.get(i, 0.0)
@@ -2464,8 +2468,52 @@ class Game:
             for i, d in b.dying_enemies.items():
                 p = max(0.0, min(1.0, (now - d['start']) / max(1, d['dur'])))
                 dying_prog[i] = p
-        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog) if b else {}
-        party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting)
+        # Actor lunge offsets during animation
+        offsets_enemy: Dict[int, int] = {}
+        offsets_party: Dict[int, int] = {}
+        if b and b.state == 'anim' and b.anim:
+            act = b.anim['action']
+            stage = b.anim.get('stage', 0)
+            now = pygame.time.get_ticks()
+            t0 = b.anim.get('t0', now)
+            # Determine current stage duration
+            durs = b.anim.get('dur', [0, 0, 0])
+            # Compute progress within current stage
+            dur = durs[stage] if stage < len(durs) else 0
+            p = 0.0
+            if dur > 0:
+                p = max(0.0, min(1.0, (now - t0) / float(dur)))
+            max_off = 10  # pixels
+            off = 0
+            if len(durs) >= 4:
+                # 4-stage: 0 windup, 1 pre, 2 impact, 3 recover
+                if stage == 1:
+                    # ease-out to move forward quicker
+                    pe = 1.0 - (1.0 - p) * (1.0 - p)
+                    off = int(max_off * pe)
+                elif stage == 2:
+                    off = max_off
+                elif stage == 3:
+                    off = int(max_off * (1.0 - p))
+                else:
+                    off = 0
+            else:
+                # 3-stage: 0 wind, 1 impact, 2 recover
+                if stage == 0:
+                    off = 0
+                elif stage == 1:
+                    off = max_off
+                elif stage == 2:
+                    off = int(max_off * (1.0 - p))
+            if act.get('actor_side') == 'party' and act.get('actor_index') is not None:
+                # Party lunges upward (negative y)
+                offsets_party[act['actor_index']] = -off
+            elif act.get('actor_side') == 'enemy' and act.get('actor_index') is not None:
+                # Enemy lunges downward (positive y)
+                offsets_enemy[act['actor_index']] = off
+
+        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog, offsets_enemy) if b else {}
+        party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting, offsets_party)
         # Turn order panel on the left (vertically centered, padded)
         if b and b.turn_order:
             inner_px, inner_py = 10, 10
