@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os, sys, json
+import random
 from typing import List, Dict, Any, Optional, Tuple
 
 import pygame
@@ -131,11 +132,14 @@ class Editor:
         self.tool_rects: List[Tuple[pygame.Rect, int]] = []
         self.btn_file_rect = pygame.Rect(0,0,0,0)
         self.btn_enc_rect = pygame.Rect(0,0,0,0)
+        self.btn_gen_rect = pygame.Rect(0,0,0,0)
         self.file_menu = False
         self.enc_menu = False
+        self.gen_menu = False
         self.file_opt_rects: List[Tuple[pygame.Rect, str]] = []
         self.enc_opt_rects: List[Tuple[pygame.Rect, str]] = []
         self.enc_btn_rects: List[Tuple[pygame.Rect, str]] = []
+        self.gen_opt_rects: List[Tuple[pygame.Rect, str]] = []
         # Monsters list for encounters UI
         self.monsters: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'monsters.json'), [])
 
@@ -240,6 +244,11 @@ class Editor:
         pygame.draw.rect(self.screen, YELLOW, self.btn_enc_rect, 1)
         self.text_small('Encounters', (px+98, py+4))
         py += 30
+        self.btn_gen_rect = pygame.Rect(px, py, 120, 22)
+        pygame.draw.rect(self.screen, (40,40,48), self.btn_gen_rect)
+        pygame.draw.rect(self.screen, YELLOW, self.btn_gen_rect, 1)
+        self.text_small('Generate', (px+8, py+4))
+        py += 30
         self.text_small('S: Save   ,/.: Prev/Next level', (px, py)); py += 18
         self.text_small('0..4: Select tool   R: Reset', (px, py)); py += 18
         self.text_small('Right-click stairs-down: link', (px, py)); py += 18
@@ -331,6 +340,22 @@ class Editor:
                 pygame.draw.rect(self.screen,(40,40,48), r); pygame.draw.rect(self.screen, WHITE, r,1)
                 self.text_small(label,(r.x+6,r.y+4)); self.enc_btn_rects.append((r,_id)); bx+= 78
 
+        # Generate menu overlay
+        if self.gen_menu and not self.input_active:
+            overlay = pygame.Surface(window_dims(), pygame.SRCALPHA)
+            overlay.fill((0,0,0,160)); self.screen.blit(overlay,(0,0))
+            box = pygame.Rect(0,0,360,180); win_w,win_h = window_dims(); box.center=(win_w//2, win_h//2)
+            pygame.draw.rect(self.screen, (20,20,26), box); pygame.draw.rect(self.screen, YELLOW, box, 2)
+            x,y=box.x+16, box.y+16
+            self.text('Generate', (x,y), YELLOW); y+=28
+            opts=[('Maze','maze'), ('Rooms + halls','rooms'), ('Close','close')]
+            self.gen_opt_rects=[]
+            for label,_id in opts:
+                r=pygame.Rect(x,y, box.w-32, 30)
+                pygame.draw.rect(self.screen, (40,40,48), r); pygame.draw.rect(self.screen, WHITE, r,1)
+                self.text_small(label,(r.x+10,r.y+7)); self.gen_opt_rects.append((r,_id))
+                y+= 36
+
         pygame.display.flip()
 
     def text(self, s, pos, color=WHITE):
@@ -417,6 +442,19 @@ class Editor:
                                 break
                         # Skip any further processing while menu is open
                         continue
+                    if self.gen_menu:
+                        for r,_id in self.gen_opt_rects:
+                            if r.collidepoint(mx,my):
+                                if _id=='maze':
+                                    generate_maze_level(self)
+                                    self.gen_menu=False
+                                elif _id=='rooms':
+                                    generate_rooms_level(self)
+                                    self.gen_menu=False
+                                elif _id=='close':
+                                    self.gen_menu=False
+                                break
+                        continue
                     if self.enc_menu:
                         for r, mid in self.enc_opt_rects:
                             if r.collidepoint(mx,my):
@@ -440,9 +478,11 @@ class Editor:
 
                     # No overlays open: normal painting + palette/buttons
                     if self.btn_file_rect.collidepoint(mx,my):
-                        self.file_menu=True; self.enc_menu=False
+                        self.file_menu=True; self.enc_menu=False; self.gen_menu=False
                     elif self.btn_enc_rect.collidepoint(mx,my):
-                        self.enc_menu=True; self.file_menu=False
+                        self.enc_menu=True; self.file_menu=False; self.gen_menu=False
+                    elif self.btn_gen_rect.collidepoint(mx,my):
+                        self.gen_menu=True; self.file_menu=False; self.enc_menu=False
                     else:
                         # palette tool buttons
                         hit_tool=False
@@ -466,6 +506,12 @@ class Editor:
                     elif event.key == pygame.K_r:
                         self.doc.grid = base_grid(); self.doc.stairs_down = self.doc.stairs_up = None
                         if self.doc.index == 0: self.doc.town_portal = (2, 2)
+                    elif event.key == pygame.K_g:
+                        self.gen_menu=True; self.file_menu=False; self.enc_menu=False
+                    elif event.key == pygame.K_m:
+                        generate_maze_level(self)
+                    elif event.key == pygame.K_n:
+                        generate_rooms_level(self)
                     elif event.key in (pygame.K_COMMA,):
                         self.doc = LevelDoc(max(0, self.doc.index - 1))
                     elif event.key in (pygame.K_PERIOD,):
@@ -476,6 +522,169 @@ class Editor:
             self.draw()
             clock.tick(60)
         pygame.quit()
+
+# ------------------------- Generation helpers -------------------------
+
+def _in_bounds_xy(x: int, y: int) -> bool:
+    return 0 <= x < W and 0 <= y < H
+
+def _is_marker(tile: int) -> bool:
+    return tile in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
+
+def _reapply_markers(doc: LevelDoc, grid: List[List[int]]):
+    if doc.town_portal:
+        x, y = doc.town_portal
+        if _in_bounds_xy(x, y):
+            grid[y][x] = T_TOWN
+    if doc.stairs_up:
+        x, y = doc.stairs_up
+        if _in_bounds_xy(x, y):
+            grid[y][x] = T_STAIRS_U
+    if doc.stairs_down:
+        x, y = doc.stairs_down
+        if _in_bounds_xy(x, y):
+            grid[y][x] = T_STAIRS_D
+
+def _all_markers(doc: LevelDoc) -> List[Tuple[int,int,int]]:
+    res: List[Tuple[int,int,int]] = []
+    if doc.town_portal:
+        x,y = doc.town_portal; res.append((x,y,T_TOWN))
+    if doc.stairs_up:
+        x,y = doc.stairs_up; res.append((x,y,T_STAIRS_U))
+    if doc.stairs_down:
+        x,y = doc.stairs_down; res.append((x,y,T_STAIRS_D))
+    return res
+
+def _clamp_center(x: int, y: int) -> Tuple[int,int]:
+    return max(1, min(W-2, x)), max(1, min(H-2, y))
+
+def _neighbors2(x: int, y: int) -> List[Tuple[int,int,int,int]]:
+    dirs = [(2,0),(-2,0),(0,2),(0,-2)]
+    res=[]
+    for dx,dy in dirs:
+        nx,ny=x+dx,y+dy
+        wx,wy=x+dx//2, y+dy//2
+        if 1 <= nx < W-1 and 1 <= ny < H-1:
+            res.append((nx,ny,wx,wy))
+    random.shuffle(res)
+    return res
+
+def _carve_room(grid: List[List[int]], left: int, top: int, w: int, h: int):
+    for yy in range(top, top+h):
+        for xx in range(left, left+w):
+            if 0 <= xx < W and 0 <= yy < H and not _is_marker(grid[yy][xx]):
+                grid[yy][xx] = T_EMPTY
+
+def _carve_line(grid: List[List[int]], x0: int, y0: int, x1: int, y1: int):
+    x,y=x0,y0
+    dx = 1 if x1> x0 else -1
+    while x != x1:
+        if _in_bounds_xy(x,y) and not _is_marker(grid[y][x]):
+            grid[y][x]=T_EMPTY
+        x += dx
+    dy = 1 if y1> y0 else -1
+    while y != y1:
+        if _in_bounds_xy(x,y) and not _is_marker(grid[y][x]):
+            grid[y][x]=T_EMPTY
+        y += dy
+    if _in_bounds_xy(x,y) and not _is_marker(grid[y][x]):
+        grid[y][x]=T_EMPTY
+
+def _ensure_borders(grid: List[List[int]]):
+    for x in range(W):
+        grid[0][x]=T_WALL; grid[H-1][x]=T_WALL
+    for y in range(H):
+        grid[y][0]=T_WALL; grid[y][W-1]=T_WALL
+
+def generate_maze_level(self: 'Editor'):
+    # Preserve markers by never overwriting those tiles.
+    grid = [[T_WALL for _ in range(W)] for _ in range(H)]
+    _reapply_markers(self.doc, grid)
+    # DFS backtracker on odd cells
+    sx = max(1, (W//2)|1)
+    sy = max(1, (H//2)|1)
+    stack=[(sx,sy)]
+    if not _is_marker(grid[sy][sx]):
+        grid[sy][sx]=T_EMPTY
+    seen={(sx,sy)}
+    while stack:
+        x,y=stack[-1]
+        nbs=[nb for nb in _neighbors2(x,y) if (nb[0],nb[1]) not in seen]
+        if not nbs:
+            stack.pop(); continue
+        nx,ny,wx,wy=random.choice(nbs)
+        if not _is_marker(grid[wy][wx]): grid[wy][wx]=T_EMPTY
+        if not _is_marker(grid[ny][nx]): grid[ny][nx]=T_EMPTY
+        seen.add((nx,ny))
+        stack.append((nx,ny))
+    # Make sure markers have at least one adjacent empty for access
+    for mx,my,_t in _all_markers(self.doc):
+        for dx,dy in [(1,0),(-1,0),(0,1),(0,-1)]:
+            nx,ny=mx+dx,my+dy
+            if 1<=nx<W-1 and 1<=ny<H-1 and not _is_marker(grid[ny][nx]):
+                grid[ny][nx]=T_EMPTY
+                break
+    _ensure_borders(grid)
+    self.doc.grid = grid
+    _reapply_markers(self.doc, self.doc.grid)
+    self.status = 'Generated maze'
+
+def generate_rooms_level(self: 'Editor'):
+    # Start with solid walls and apply markers
+    grid = [[T_WALL for _ in range(W)] for _ in range(H)]
+    _reapply_markers(self.doc, grid)
+    # Create a 3x3 centered room for each marker, and center the marker in it
+    centers: List[Tuple[int,int]] = []
+    rooms: List[Tuple[int,int,int,int]] = []  # (left, top, w, h)
+    # First center each marker
+    for x,y,t in _all_markers(self.doc):
+        cx,cy=_clamp_center(x,y)
+        _carve_room(grid, cx-1, cy-1, 3, 3)
+        # Move marker to center in doc
+        if t==T_TOWN:
+            self.doc.town_portal=(cx,cy)
+        elif t==T_STAIRS_U:
+            self.doc.stairs_up=(cx,cy)
+        elif t==T_STAIRS_D:
+            self.doc.stairs_down=(cx,cy)
+        grid[cy][cx]=t
+        centers.append((cx,cy))
+        rooms.append((cx-1, cy-1, 3, 3))
+    # Random additional rooms (3x3, 6x3, 3x6) without overlap
+    def overlaps(a, b, pad=1):
+        ax,ay,aw,ah=a; bx,by,bw,bh=b
+        ar=pygame.Rect(ax,ay,aw,ah).inflate(pad*2,pad*2)
+        br=pygame.Rect(bx,by,bw,bh).inflate(pad*2,pad*2)
+        return ar.colliderect(br)
+    sizes=[(3,3),(6,3),(3,6)]
+    attempts=max(10,(W*H)//16)
+    for _ in range(attempts):
+        w,h=random.choice(sizes)
+        x=random.randint(1, max(1, W-w-2))
+        y=random.randint(1, max(1, H-h-2))
+        cand=(x,y,w,h)
+        if any(overlaps(cand, ex, pad=1) for ex in rooms):
+            continue
+        rooms.append(cand)
+    # Carve rooms and record centers
+    for (x,y,w,h) in rooms:
+        _carve_room(grid, x, y, w, h)
+        cx,cy= x + w//2, y + h//2
+        centers.append((cx,cy))
+    # Connect centers with simple L corridors in sequence
+    if centers:
+        # Deduplicate while preserving order
+        seen=set(); ordered=[]
+        for c in centers:
+            if c not in seen:
+                seen.add(c); ordered.append(c)
+        for i in range(1,len(ordered)):
+            x0,y0=ordered[i-1]; x1,y1=ordered[i]
+            _carve_line(grid, x0, y0, x1, y1)
+    _ensure_borders(grid)
+    self.doc.grid = grid
+    _reapply_markers(self.doc, self.doc.grid)
+    self.status = 'Generated rooms + halls'
 
 if __name__ == '__main__':
     idx = 0
