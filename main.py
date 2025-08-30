@@ -1521,11 +1521,20 @@ class Game:
             self.r.text(view, s["name"] + "_", (260, y), YELLOW)
             self.r.text_small(view, "Enter to confirm", (32, y + 28), LIGHT)
         elif s["step"] == 1:
-            self.r.text(view, "Race (←/→, Enter)", (32, y))
-            self.r.text_big(view, RACES[s["race_ix"]], (32, y + 30), YELLOW)
+            # Race list menu
+            self.r.text(view, "Choose Race (Enter)", (32, y))
+            self.r.draw_center_menu(RACES, s["race_ix"])
+            self.r.text_small(view, "↑/↓ to move, Enter to confirm", (32, VIEW_H - 28), LIGHT)
         elif s["step"] == 2:
-            self.r.text(view, "Class (←/→, Enter)", (32, y))
-            self.r.text_big(view, CLASSES[s["class_ix"]], (32, y + 30), YELLOW)
+            # Class list with prices
+            self.r.text(view, "Choose Class (Enter)", (32, y))
+            class_opts = [f"{c} — {CLASS_COSTS.get(c,0)}g" for c in CLASSES]
+            self.r.draw_center_menu(class_opts, s["class_ix"])
+            # Show party gold and affordability
+            chosen = CLASSES[s["class_ix"]]
+            cost = CLASS_COSTS.get(chosen, 0)
+            col = YELLOW if self.party.gold >= cost else RED
+            self.r.text_small(view, f"Gold: {self.party.gold}g  Selected cost: {cost}g", (32, VIEW_H - 28), col)
         elif s["step"] == 3:
             temp = Character(s["name"], RACES[s["race_ix"]], CLASSES[s["class_ix"]])
             self.r.text(view, f"Name: {temp.name}", (32, y))
@@ -1554,19 +1563,23 @@ class Game:
                     if ch.isprintable() and len(s["name"]) < 16:
                         s["name"] += ch
             elif s["step"] == 1:
-                if event.key in (pygame.K_LEFT, pygame.K_a):
+                if event.key in (pygame.K_UP, pygame.K_k):
                     s["race_ix"] = (s["race_ix"] - 1) % len(RACES)
-                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
                     s["race_ix"] = (s["race_ix"] + 1) % len(RACES)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     s["step"] = 2
+                elif event.key == pygame.K_ESCAPE:
+                    s["step"] = 0
             elif s["step"] == 2:
-                if event.key in (pygame.K_LEFT, pygame.K_a):
+                if event.key in (pygame.K_UP, pygame.K_k):
                     s["class_ix"] = (s["class_ix"] - 1) % len(CLASSES)
-                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
                     s["class_ix"] = (s["class_ix"] + 1) % len(CLASSES)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     s["step"] = 3
+                elif event.key == pygame.K_ESCAPE:
+                    s["step"] = 1
             elif s["step"] == 3:
                 if event.key in (pygame.K_UP, pygame.K_k):
                     self.create_confirm_index = (self.create_confirm_index - 1) % 3
