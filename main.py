@@ -89,21 +89,10 @@ BASE_HP = {"Fighter": 12, "Mage": 6, "Priest": 8, "Thief": 8}
 BASE_MP = {"Fighter": 0, "Mage": 8, "Priest": 6, "Thief": 0}
 AC_BASE = 10
 
-ENEMY_TABLE = [
-    {"name": "Giant Rat", "hp": (6, 10), "ac": 8, "atk": (1, 4), "exp": 12, "gold": (1, 8)},
-    {"name": "Goblin", "hp": (8, 14), "ac": 7, "atk": (1, 6), "exp": 20, "gold": (2, 12)},
-    {"name": "Skeleton", "hp": (10, 16), "ac": 6, "atk": (1, 8), "exp": 28, "gold": (4, 18)},
-    {"name": "Kobold", "hp": (8, 12), "ac": 7, "atk": (1, 6), "exp": 18, "gold": (2, 10)},
-]
-
-SHOP_ITEMS = [
-    {"id": "potion_small", "name": "Small Potion (+10 HP)", "type": "consumable", "heal": 10, "price": 20},
-    {"id": "sword_basic", "name": "Basic Sword (+2 ATK)", "type": "weapon", "atk": 2, "price": 60},
-    {"id": "leather_armor", "name": "Leather Armor (-1 AC)", "type": "armor", "ac": -1, "price": 60},
-    {"id": "boots", "name": "Boots (+1 AGI)", "type": "accessory", "agi": 1, "price": 50},
-    {"id": "helm", "name": "Helm (-1 AC)", "type": "accessory", "ac": -1, "price": 40},
-]
-ITEMS_BY_ID = {it["id"]: it for it in SHOP_ITEMS}
+# Data resources are loaded from JSON (monsters, items, skills, levels)
+# Module-level placeholders populated by Game.load_data()
+SHOP_ITEMS: List[Dict[str, Any]] = []
+ITEMS_BY_ID: Dict[str, Dict[str, Any]] = {}
 
 # Recruiting costs per class (party pays on creation)
 CLASS_COSTS = {"Thief": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
@@ -257,19 +246,18 @@ class Enemy:
     agi: int = 8
 
     @staticmethod
-    def random_enemy():
-        e = random.choice(ENEMY_TABLE)
-        hp = random.randint(*e["hp"])
+    def from_base(base: Dict[str, Any]):
+        hp = random.randint(base.get("hp_low", 6), base.get("hp_high", 10))
         return Enemy(
-            name=e["name"],
+            name=base.get("name", "Monster"),
             hp=hp,
-            ac=e["ac"],
-            atk_low=e["atk"][0],
-            atk_high=e["atk"][1],
-            exp=e["exp"],
-            gold_low=e["gold"][0],
-            gold_high=e["gold"][1],
-            agi=random.randint(5, 12),
+            ac=int(base.get("ac", 8)),
+            atk_low=int(base.get("atk_low", 1)),
+            atk_high=int(base.get("atk_high", 4)),
+            exp=int(base.get("exp", 10)),
+            gold_low=int(base.get("gold_low", 1)),
+            gold_high=int(base.get("gold_high", 8)),
+            agi=int(base.get("agi", random.randint(5, 12))),
         )
 
 
@@ -298,6 +286,9 @@ class Level:
     stairs_down: Optional[Tuple[int, int]] = None
     stairs_up: Optional[Tuple[int, int]] = None
     town_portal: Optional[Tuple[int, int]] = None
+    # Encounter config loaded from JSON
+    encounter_monsters: List[str] = field(default_factory=list)
+    encounter_group: Tuple[int, int] = (1, 3)
 
 
 class Dungeon:
@@ -314,6 +305,40 @@ class Dungeon:
             lvl = Level(grid=grid)
             self.levels.append(lvl)
         lvl = self.levels[ix]
+        # Load level JSON if available (grid, markers, encounters)
+        try:
+            path = os.path.join('data', 'levels', f'level{ix}.json')
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+                # Grid
+                g = data.get('grid')
+                if isinstance(g, list) and g and isinstance(g[0], list):
+                    h = min(self.h, len(g))
+                    w = min(self.w, len(g[0]))
+                    newg = generate_base_grid(self.w, self.h)
+                    for y in range(h):
+                        for x in range(w):
+                            try:
+                                newg[y][x] = int(g[y][x])
+                            except Exception:
+                                pass
+                    lvl.grid = newg
+                # Markers
+                sd = data.get('stairs_down'); su = data.get('stairs_up'); tp = data.get('town_portal')
+                lvl.stairs_down = tuple(sd) if isinstance(sd, list) and len(sd) == 2 else lvl.stairs_down
+                lvl.stairs_up = tuple(su) if isinstance(su, list) and len(su) == 2 else lvl.stairs_up
+                if ix == 0 and isinstance(tp, list) and len(tp) == 2:
+                    lvl.town_portal = tuple(tp)
+                # Encounters
+                enc = data.get('encounters', {})
+                mons = enc.get('monsters', [])
+                grp = enc.get('group', [1, 3])
+                lvl.encounter_monsters = mons if isinstance(mons, list) else []
+                if isinstance(grp, list) and len(grp) == 2:
+                    lvl.encounter_group = (int(grp[0]), int(grp[1]))
+        except Exception:
+            pass
         if ix == 0 and not lvl.town_portal:
             lvl.town_portal = (2, 2)
             x, y = lvl.town_portal
@@ -615,10 +640,13 @@ class MessageLog:
 
 # ------------------------------ Battle -------------------------------------
 class Battle:
-    def __init__(self, party: Party, log: MessageLog, effects: HitEffects):
+    def __init__(self, party: Party, log: MessageLog, effects: HitEffects, items_by_id: Dict[str, Any], monsters_by_id: Dict[str, Any], skills_config: Dict[str, List[Dict[str, Any]]]):
         self.party = party
         self.log = log
         self.effects = effects
+        self.items_by_id = items_by_id
+        self.monsters_by_id = monsters_by_id
+        self.skills_config = skills_config
         self.enemies: List[Enemy] = []
         self.turn_index = 0  # kept for compatibility in some calls
         self.turn_order: List[Tuple[str, int]] = []  # list of (side, index) where index is party global index or enemy index
@@ -653,9 +681,13 @@ class Battle:
         self.dying_enemies: Dict[int, Dict[str, int]] = {}  # i -> {'start':ms,'dur':ms}
         self.downed_party: Dict[int, Dict[str, int]] = {}   # gi -> {'start':ms,'dur':ms}
 
-    def start_random(self):
-        count = random.randint(1, 3)
-        self.enemies = [Enemy.random_enemy() for _ in range(count)]
+    def start_random(self, allowed: Optional[List[str]] = None, group: Tuple[int, int] = (1, 3)):
+        # Build enemy group from allowed ids and monster base data
+        ids = [k for k in (allowed or list(self.monsters_by_id.keys())) if k in self.monsters_by_id]
+        nmin, nmax = group
+        count = random.randint(max(1, nmin), max(nmin, nmax))
+        chosen = [random.choice(ids) for _ in range(count)] if ids else []
+        self.enemies = [Enemy.from_base(self.monsters_by_id[cid]) for cid in chosen]
         self.log.add(f"Ambushed by {', '.join(e.name for e in self.enemies)}!")
         self.build_turn_order()
         self.turn_pos = 0
@@ -795,12 +827,13 @@ class Battle:
         self.ui_menu_options.append(('skill', 'Skill'))
         self.ui_menu_options.append(('item', 'Items'))
         self.ui_menu_options.append(('run', 'Run'))
-        # Build skills list for current actor
+        # Build skills list for current actor from config
         skills: List[Tuple[str, str]] = []
-        if a.cls == 'Mage':
-            skills.append(('spell', 'Spark'))
-        if a.cls == 'Priest':
-            skills.append(('heal', 'Heal'))
+        for ent in self.skills_config.get(a.cls, []):
+            sid = ent.get('id')
+            label = ent.get('name', sid)
+            if sid:
+                skills.append((sid, label))
         # Could add more per-class skills here later
         # Filter by resource availability (e.g., MP > 0)
         filt: List[Tuple[str, str]] = []
@@ -815,7 +848,7 @@ class Battle:
         # Return list of item ids in party inventory that can be used in battle (consumables)
         items = []
         for iid in self.party.inventory:
-            it = ITEMS_BY_ID.get(iid, {})
+            it = self.items_by_id.get(iid, {})
             if it.get('type') == 'consumable':
                 items.append(iid)
         return items
@@ -834,7 +867,7 @@ class Battle:
         self.floaters.append({'side': side, 'index': index, 'text': text, 'start': pygame.time.get_ticks(), 'dur': dur, 'color': color})
 
     def make_item_use_action(self, actor: Character, target_gi: int, iid: str) -> Optional[Dict[str, Any]]:
-        it = ITEMS_BY_ID.get(iid)
+        it = self.items_by_id.get(iid)
         if not it or it.get('type') != 'consumable':
             return None
         # For now only handle healing potions
@@ -1073,6 +1106,13 @@ class Game:
         self.facing = 1
         self.effects = HitEffects()
         self.in_battle: Optional[Battle] = None
+
+        # Data
+        self.items_list: List[Dict[str, Any]] = []
+        self.items_by_id: Dict[str, Dict[str, Any]] = {}
+        self.monsters_by_id: Dict[str, Dict[str, Any]] = {}
+        self.skills_config: Dict[str, List[Dict[str, Any]]] = {}
+        self.load_data()
         # Battle intro transition
         self.combat_intro_active: bool = False
         self.combat_intro_stage: int = 0  # 0 flash1, 1 pause, 2 flash2, 3 fade
@@ -1091,6 +1131,8 @@ class Game:
         self.shop_sell_item_ix = 0
         self.shop_pending_item: Optional[str] = None
         self.pause_index = 0
+        self.pause_confirming_quit = False
+        self.pause_confirm_index = 1  # default to No
 
         # Items UI state (party inventory focused)
         self.items_phase = 'items'  # 'items' | 'item_action' | 'use_target'
@@ -1129,6 +1171,37 @@ class Game:
         self.victory_info: Dict[str, Any] = {}
         # Defeat screen fade
         self.defeat_t0: int = 0
+
+
+    def load_json(self, path: str, default):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception:
+            return default
+
+    def load_data(self):
+        # Items
+        items = self.load_json(os.path.join('data', 'items.json'), [])
+        self.items_list = items
+        self.items_by_id = {it.get('id'): it for it in items if it.get('id')}
+        # Shop stock (ids) — if not present, default to all items
+        stock_path = os.path.join('data', 'shop.json')
+        try:
+            with open(stock_path) as f:
+                stock_ids = json.load(f)
+        except Exception:
+            stock_ids = [it.get('id') for it in items if it.get('id')]
+        # Expose to module-level for existing code paths
+        global SHOP_ITEMS, ITEMS_BY_ID
+        ITEMS_BY_ID = self.items_by_id
+        SHOP_ITEMS = [self.items_by_id[i] for i in stock_ids if i in self.items_by_id]
+        # Monsters
+        monsters = self.load_json(os.path.join('data', 'monsters.json'), [])
+        self.monsters_by_id = {m.get('id'): m for m in monsters if m.get('id')}
+        # Skills
+        skills = self.load_json(os.path.join('data', 'skills.json'), {})
+        self.skills_config = skills.get('classes', {})
 
     # --------------- Save/Load ---------------
     def save(self, path="save.json"):
@@ -1936,8 +2009,12 @@ class Game:
         self.log.add(f"Ascend to level {self.level_ix}.")
 
     def start_battle(self):
-        self.in_battle = Battle(self.party, self.log, self.effects)
-        self.in_battle.start_random()
+        self.in_battle = Battle(self.party, self.log, self.effects, self.items_by_id, self.monsters_by_id, self.skills_config)
+        # Use level-specific encounter config if available
+        lvl = self.dun.levels[self.level_ix]
+        allowed = lvl.encounter_monsters or list(self.monsters_by_id.keys())
+        group = getattr(lvl, 'encounter_group', (1,3))
+        self.in_battle.start_random(allowed=allowed, group=group)
         # Begin transition on the labyrinth view first
         self.mode = MODE_COMBAT_INTRO
         self.combat_intro_active = True
@@ -1977,41 +2054,66 @@ class Game:
         s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
         s.fill((0, 0, 0, 160))
         view.blit(s, (0, 0))
-        self.r.text_big(view, "Menu", (WIDTH//2 - 40, 80))
-        opts = ["Status", "Items", "Equip", "Close"]
-        y = 140
-        for i, opt in enumerate(opts):
-            prefix = "> " if i == self.pause_index else "  "
-            self.r.text(view, f"{prefix}{opt}", (WIDTH//2 - 80, y), YELLOW if i == self.pause_index else WHITE)
-            y += 24
+        if self.pause_confirming_quit:
+            # Confirm quit prompt
+            self.r.text_big(view, "Are you sure?", (WIDTH//2 - 100, 100), YELLOW)
+            self.r.draw_center_menu(["Yes", "No"], self.pause_confirm_index)
+        else:
+            self.r.text_big(view, "Menu", (WIDTH//2 - 40, 80))
+            opts = ["Status", "Items", "Equip", "Quit", "Close"]
+            y = 140
+            for i, opt in enumerate(opts):
+                prefix = "> " if i == self.pause_index else "  "
+                self.r.text(view, f"{prefix}{opt}", (WIDTH//2 - 80, y), YELLOW if i == self.pause_index else WHITE)
+                y += 24
 
     def pause_input(self, event):
         if event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_UP, pygame.K_k):
-                self.pause_index = (self.pause_index - 1) % 4
-            elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.pause_index = (self.pause_index + 1) % 4
-            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if self.pause_index == 0:
-                    self.return_mode = MODE_PAUSE
-                    self.mode = MODE_STATUS
-                elif self.pause_index == 1:
-                    # Items opened from Labyrinth; return to Maze when exiting
-                    self.return_mode = MODE_MAZE
-                    self.items_phase = 'items'
-                    self.items_item_ix = 0
-                    self.mode = MODE_ITEMS
-                elif self.pause_index == 2:
-                    self.equip_phase = 'member'
-                    self.equip_member_ix = 0
-                    self.equip_slot_ix = 0
-                    self.equip_choose_ix = 0
-                    self.return_mode = MODE_PAUSE
-                    self.mode = MODE_EQUIP
-                elif self.pause_index == 3:
+            if self.pause_confirming_quit:
+                # Handle Yes/No
+                if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
+                    self.pause_confirm_index = 1 - self.pause_confirm_index
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.pause_confirm_index == 0:  # Yes
+                        self.title_index = 0
+                        self.pause_confirming_quit = False
+                        self.mode = MODE_TITLE
+                    else:  # No
+                        self.pause_confirming_quit = False
+                        self.mode = MODE_MAZE
+                elif event.key == pygame.K_ESCAPE:
+                    self.pause_confirming_quit = False
                     self.mode = MODE_MAZE
-            elif event.key == pygame.K_ESCAPE:
-                self.mode = MODE_MAZE
+            else:
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.pause_index = (self.pause_index - 1) % 5
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.pause_index = (self.pause_index + 1) % 5
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.pause_index == 0:
+                        self.return_mode = MODE_PAUSE
+                        self.mode = MODE_STATUS
+                    elif self.pause_index == 1:
+                        # Items opened from Labyrinth; return to Maze when exiting
+                        self.return_mode = MODE_MAZE
+                        self.items_phase = 'items'
+                        self.items_item_ix = 0
+                        self.mode = MODE_ITEMS
+                    elif self.pause_index == 2:
+                        self.equip_phase = 'member'
+                        self.equip_member_ix = 0
+                        self.equip_slot_ix = 0
+                        self.equip_choose_ix = 0
+                        self.return_mode = MODE_PAUSE
+                        self.mode = MODE_EQUIP
+                    elif self.pause_index == 3:
+                        # Quit -> confirm prompt
+                        self.pause_confirming_quit = True
+                        self.pause_confirm_index = 1  # default to No
+                    elif self.pause_index == 4:
+                        self.mode = MODE_MAZE
+                elif event.key == pygame.K_ESCAPE:
+                    self.mode = MODE_MAZE
 
     def draw_items(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -2607,6 +2709,25 @@ class Game:
                 alpha = max(0, 255 - int(255 * (t / 500.0)))
                 overlay.fill((0, 0, 0, alpha))
             view.blit(overlay, (0, 0))
+
+        # Draw floaters (damage, heal, MISS) above windows, on top of overlays
+        if b:
+            now = pygame.time.get_ticks()
+            for f in b.floaters:
+                rect = party_rects.get(f['index']) if f.get('side') == 'party' else enemy_rects.get(f['index'])
+                if not rect:
+                    continue
+                t = now - f['start']
+                p = max(0.0, min(1.0, t / max(1, f.get('dur', 700))))
+                base = rect.top + 26
+                if str(f.get('text', '')).upper() == 'MISS':
+                    base = rect.top + 34
+                y = base - int(20 * p)
+                alpha = max(0, 255 - int(255 * p))
+                color = f.get('color', WHITE)
+                surf = self.r.font_big.render(str(f.get('text', '')), True, color)
+                surf.set_alpha(alpha)
+                view.blit(surf, (rect.centerx - surf.get_width() // 2, y))
 
     # --------------- Victory Screen ---------------
     def draw_victory(self):

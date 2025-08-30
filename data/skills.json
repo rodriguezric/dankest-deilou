@@ -1,0 +1,6 @@
+{
+  "classes": {
+    "Mage": [ {"id": "spell", "name": "Spark", "mp_cost": 1} ],
+    "Priest": [ {"id": "heal", "name": "Heal", "mp_cost": 1} ]
+  }
+}
