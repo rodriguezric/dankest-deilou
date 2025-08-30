@@ -17,12 +17,16 @@
         "max_mp": 0,
         "mp": 0,
         "ac": 10,
-        "exp": 44,
+        "exp": 63,
         "gold": 0,
         "alive": true,
         "equipment": {
           "weapon_atk": 0,
-          "armor_ac": 0
+          "armor_ac": 0,
+          "weapon_id": null,
+          "armor_id": null,
+          "acc1_id": "boots",
+          "acc2_id": null
         },
         "inventory": []
       },
@@ -38,16 +42,20 @@
         "agi": 13,
         "luck": 9,
         "max_hp": 12,
-        "hp": 9,
+        "hp": 10,
         "max_mp": 1,
         "mp": 1,
         "ac": 10,
-        "exp": 44,
+        "exp": 63,
         "gold": 0,
         "alive": true,
         "equipment": {
-          "weapon_atk": 0,
-          "armor_ac": 0
+          "weapon_atk": 2,
+          "armor_ac": 0,
+          "weapon_id": "sword_basic",
+          "armor_id": null,
+          "acc1_id": null,
+          "acc2_id": null
         },
         "inventory": []
       },
@@ -67,12 +75,16 @@
         "max_mp": 8,
         "mp": 3,
         "ac": 10,
-        "exp": 44,
+        "exp": 63,
         "gold": 0,
         "alive": true,
         "equipment": {
           "weapon_atk": 0,
-          "armor_ac": 0
+          "armor_ac": 0,
+          "weapon_id": null,
+          "armor_id": null,
+          "acc1_id": null,
+          "acc2_id": null
         },
         "inventory": []
       }
@@ -82,13 +94,13 @@
       0,
       2
     ],
-    "gold": 137,
+    "gold": 26,
     "inventory": []
   },
   "pos": [
     2,
     2
   ],
-  "facing": 0,
+  "facing": 3,
   "level": 0
 }

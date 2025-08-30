@@ -60,6 +60,7 @@ MODE_BATTLE = "BATTLE"
 MODE_SAVELOAD = "SAVELOAD"
 MODE_PAUSE = "PAUSE"
 MODE_ITEMS = "ITEMS"
+MODE_EQUIP = "EQUIP"
 
 # Temple costs
 TEMPLE_HEAL_PARTY_COST = 30
@@ -96,6 +97,8 @@ SHOP_ITEMS = [
     {"id": "potion_small", "name": "Small Potion (+10 HP)", "type": "consumable", "heal": 10, "price": 20},
     {"id": "sword_basic", "name": "Basic Sword (+2 ATK)", "type": "weapon", "atk": 2, "price": 60},
     {"id": "leather_armor", "name": "Leather Armor (-1 AC)", "type": "armor", "ac": -1, "price": 60},
+    {"id": "boots", "name": "Boots (+1 AGI)", "type": "accessory", "agi": 1, "price": 50},
+    {"id": "helm", "name": "Helm (-1 AC)", "type": "accessory", "ac": -1, "price": 40},
 ]
 ITEMS_BY_ID = {it["id"]: it for it in SHOP_ITEMS}
 
@@ -118,6 +121,10 @@ def ability_mod(score: int) -> int:
 class Equipment:
     weapon_atk: int = 0
     armor_ac: int = 0
+    weapon_id: Optional[str] = None
+    armor_id: Optional[str] = None
+    acc1_id: Optional[str] = None
+    acc2_id: Optional[str] = None
 
 
 @dataclass
@@ -156,7 +163,21 @@ class Character:
 
     @property
     def defense_ac(self) -> int:
-        return self.ac + self.equipment.armor_ac
+        # Base AC plus armor and accessory AC modifiers
+        acc_ac = 0
+        for iid in (self.equipment.acc1_id, self.equipment.acc2_id):
+            if iid:
+                acc_ac += ITEMS_BY_ID.get(iid, {}).get('ac', 0)
+        return self.ac + self.equipment.armor_ac + acc_ac
+
+    @property
+    def agi_effective(self) -> int:
+        # Base AGI plus accessory bonuses
+        bonus = 0
+        for iid in (self.equipment.acc1_id, self.equipment.acc2_id):
+            if iid:
+                bonus += ITEMS_BY_ID.get(iid, {}).get('agi', 0)
+        return self.agi + bonus
 
     def to_dict(self):
         d = asdict(self)
@@ -616,6 +637,11 @@ class Battle:
         self.target_menu_index: int = 0
         self.target_mode: Optional[Dict[str, Any]] = None  # {'side': 'enemy'|'party', 'action': 'attack'|'spell'|'heal'}
 
+        # Items UI
+        self.item_menu_index: int = 0
+        self.item_action_index: int = 0
+        self.selected_item_iid: Optional[str] = None
+
         # Defeat animations
         self.dying_enemies: Dict[int, Dict[str, int]] = {}  # i -> {'start':ms,'dur':ms}
         self.downed_party: Dict[int, Dict[str, int]] = {}   # gi -> {'start':ms,'dur':ms}
@@ -630,7 +656,7 @@ class Battle:
 
     def build_turn_order(self):
         # Build mixed initiative order by AGI (descending). Ties: party before enemy, then index.
-        party_tokens = [("party", i, self.party.members[i].agi) for i in self.party.active if 0 <= i < len(self.party.members) and self.party.members[i].alive and self.party.members[i].hp > 0]
+        party_tokens = [("party", i, self.party.members[i].agi_effective) for i in self.party.active if 0 <= i < len(self.party.members) and self.party.members[i].alive and self.party.members[i].hp > 0]
         enemy_tokens = [("enemy", i, e.agi) for i, e in enumerate(self.enemies) if e.hp > 0]
         combined = party_tokens + enemy_tokens
         combined.sort(key=lambda t: (-t[2], 0 if t[0] == 'party' else 1, t[1]))
@@ -693,6 +719,7 @@ class Battle:
                 filt.append((sid, label))
             self.skill_options = filt
             self.ui_menu_options.append(('skill', 'Skill'))
+            self.ui_menu_options.append(('item', 'Items'))
             self.ui_menu_options.append(('run', 'Run'))
             self.skill_menu_index = 0
         else:
@@ -760,6 +787,7 @@ class Battle:
         # Main menu
         self.ui_menu_options.append(('attack', 'Attack'))
         self.ui_menu_options.append(('skill', 'Skill'))
+        self.ui_menu_options.append(('item', 'Items'))
         self.ui_menu_options.append(('run', 'Run'))
         # Build skills list for current actor
         skills: List[Tuple[str, str]] = []
@@ -777,6 +805,15 @@ class Battle:
         self.skill_options = filt
         self.skill_menu_index = 0
 
+    def usable_items(self) -> List[str]:
+        # Return list of item ids in party inventory that can be used in battle (consumables)
+        items = []
+        for iid in self.party.inventory:
+            it = ITEMS_BY_ID.get(iid, {})
+            if it.get('type') == 'consumable':
+                items.append(iid)
+        return items
+
     def queue_enemy_round(self):
         # Deprecated in mixed initiative; kept for compatibility
         self.enemy_queue = []
@@ -789,6 +826,19 @@ class Battle:
 
     def add_floater(self, side: str, index: int, text: str, dur: int = 700, color=WHITE):
         self.floaters.append({'side': side, 'index': index, 'text': text, 'start': pygame.time.get_ticks(), 'dur': dur, 'color': color})
+
+    def make_item_use_action(self, actor: Character, target_gi: int, iid: str) -> Optional[Dict[str, Any]]:
+        it = ITEMS_BY_ID.get(iid)
+        if not it or it.get('type') != 'consumable':
+            return None
+        # For now only handle healing potions
+        heal = it.get('heal', 0)
+        gi = self.party.members.index(actor)
+        return {
+            'type': 'heal', 'actor_side': 'party', 'actor_index': gi,
+            'target_side': 'party', 'target_index': target_gi,
+            'heal': heal, 'actor_name': actor.name,
+        }
 
     def update(self):
         now = pygame.time.get_ticks()
@@ -1018,13 +1068,27 @@ class Game:
         self.menu_index = 0
         self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
         self.create_confirm_index = 0
-        self.shop_index = 0
+        # Shop UI state
+        self.shop_phase = 'menu'  # 'menu' | 'buy_items' | 'buy_target' | 'sell_member' | 'sell_items'
+        self.shop_index = 0       # generic index for current phase
+        self.shop_buy_ix = 0
+        self.shop_target_ix = 0
+        self.shop_sell_member_ix = 0
+        self.shop_sell_item_ix = 0
+        self.shop_pending_item: Optional[str] = None
         self.pause_index = 0
 
-        # Items UI state
-        self.items_phase = 'member'
-        self.items_member_ix = 0
+        # Items UI state (party inventory focused)
+        self.items_phase = 'items'  # 'items' | 'item_action' | 'use_target'
         self.items_item_ix = 0
+        self.items_action_ix = 0
+        self.items_target_ix = 0
+
+        # Equip UI state
+        self.equip_phase = 'member'  # 'member' | 'slot' | 'choose'
+        self.equip_member_ix = 0
+        self.equip_slot_ix = 0  # 0 Weapon, 1 Armor, 2 Acc1, 3 Acc2
+        self.equip_choose_ix = 0
 
         # Tavern UI state
         self.party_mode: str = 'menu'  # 'menu' | 'dismiss_select' | 'dismiss_confirm'
@@ -1163,6 +1227,8 @@ class Game:
             "Temple (Heal/Revive)",
             "Trader (Shop)",
             "Enter the Labyrinth",
+            "Equip",
+            "Items",
             "Save / Load",
             "Exit to Title",
         ]
@@ -1176,9 +1242,9 @@ class Game:
     def town_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.menu_index = (self.menu_index - 1) % 9
+                self.menu_index = (self.menu_index - 1) % 11
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.menu_index = (self.menu_index + 1) % 9
+                self.menu_index = (self.menu_index + 1) % 11
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self.select_town_option(self.menu_index)
             elif pygame.K_1 <= event.key <= pygame.K_9:
@@ -1202,6 +1268,8 @@ class Game:
             self.temple_menu_index = 0
         elif ix == 5:
             self.mode = MODE_SHOP
+            self.shop_phase = 'menu'
+            self.shop_index = 0
         elif ix == 6:
             if not self.party.active:
                 self.log.add("Choose up to 4 active members first (Form Party).")
@@ -1215,8 +1283,22 @@ class Game:
                 self.mode = MODE_MAZE
                 self.log.add("You descend into the Labyrinth...")
         elif ix == 7:
-            self.mode = MODE_SAVELOAD
+            # Equip from town
+            self.equip_phase = 'member'
+            self.equip_member_ix = 0
+            self.equip_slot_ix = 0
+            self.equip_choose_ix = 0
+            self.return_mode = MODE_TOWN
+            self.mode = MODE_EQUIP
         elif ix == 8:
+            # Items from town
+            self.return_mode = MODE_TOWN
+            self.items_phase = 'items'
+            self.items_item_ix = 0
+            self.mode = MODE_ITEMS
+        elif ix == 9:
+            self.mode = MODE_SAVELOAD
+        elif ix == 10:
             # Exit to title screen
             self.title_index = 0
             self.mode = MODE_TITLE
@@ -1523,46 +1605,88 @@ class Game:
     def draw_shop(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        self.r.text_big(view, "Trader — Buy", (20, 16))
+        self.r.text_big(view, "Trader", (20, 16))
         self.r.text_small(view, f"Gold: {self.party.gold}", (WIDTH - 140, 20), YELLOW)
         y = 56
-        for i, it in enumerate(SHOP_ITEMS):
-            prefix = "> " if i == self.shop_index else "  "
-            self.r.text(view, f"{prefix}{it['name']} — {it['price']}g", (32, y), YELLOW if i == self.shop_index else WHITE)
-            y += 20
-        self.r.text_small(view, "Enter: Buy  Esc: Back", (32, y + 4), LIGHT)
+        if self.shop_phase == 'menu':
+            opts = ["Buy", "Sell", "Back"]
+            for i, s in enumerate(opts):
+                prefix = "> " if i == self.shop_index else "  "
+                col = YELLOW if i == self.shop_index else WHITE
+                self.r.text(view, f"{prefix}{s}", (32, y), col); y += 22
+            self.r.text_small(view, "Enter: Select  Esc: Back", (32, y + 4), LIGHT)
+        elif self.shop_phase == 'buy_items':
+            for i, it in enumerate(SHOP_ITEMS):
+                prefix = "> " if i == self.shop_buy_ix else "  "
+                col = YELLOW if i == self.shop_buy_ix else WHITE
+                self.r.text(view, f"{prefix}{it['name']} — {it['price']}g", (32, y), col); y += 20
+            self.r.text_small(view, "Enter: Buy  Esc: Back", (32, y + 4), LIGHT)
+        else:  # sell_items
+            self.r.text(view, f"Sell items — Party", (32, 50))
+            if not self.party.inventory:
+                self.r.text_small(view, "(no items)", (32, y), LIGHT)
+            else:
+                for i, iid in enumerate(self.party.inventory):
+                    it = ITEMS_BY_ID.get(iid, {"name": iid, "price": 10})
+                    sellp = int(it.get('price', 10) * 0.5)
+                    prefix = "> " if i == self.shop_sell_item_ix else "  "
+                    col = YELLOW if i == self.shop_sell_item_ix else WHITE
+                    self.r.text(view, f"{prefix}{it['name']} — {sellp}g", (32, y), col); y += 20
+            self.r.text_small(view, "Enter: Sell  Esc: Back", (32, y + 6), LIGHT)
 
     def shop_input(self, event):
-        if event.type == pygame.KEYDOWN:
+        if event.type != pygame.KEYDOWN:
+            return
+        # Phase: menu
+        if self.shop_phase == 'menu':
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.shop_index = (self.shop_index - 1) % len(SHOP_ITEMS)
+                self.shop_index = (self.shop_index - 1) % 3
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.shop_index = (self.shop_index + 1) % len(SHOP_ITEMS)
+                self.shop_index = (self.shop_index + 1) % 3
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                item = SHOP_ITEMS[self.shop_index]
-                if self.party.gold < item["price"]:
-                    self.log.add("Not enough gold.")
-                    return
-                self.party.gold -= item["price"]
-                if item["type"] == "consumable":
-                    self.party.inventory.append(item["id"])
-                    self.log.add("Bought a potion.")
-                elif item["type"] == "weapon":
-                    if not self.party.members:
-                        self.log.add("No one to equip.")
-                        return
-                    buyer = self.party.members[0]
-                    buyer.equipment.weapon_atk = item["atk"]
-                    self.log.add("Equipped a Basic Sword (+2 ATK).")
-                elif item["type"] == "armor":
-                    if not self.party.members:
-                        self.log.add("No one to equip.")
-                        return
-                    buyer = self.party.members[0]
-                    buyer.equipment.armor_ac = item["ac"]
-                    self.log.add("Equipped Leather Armor (-1 AC).")
+                if self.shop_index == 0:
+                    self.shop_phase = 'buy_items'; self.shop_buy_ix = 0
+                elif self.shop_index == 1:
+                    self.shop_phase = 'sell_items'; self.shop_sell_item_ix = 0
+                else:
+                    self.mode = MODE_TOWN
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
+        # Phase: buy_items
+        elif self.shop_phase == 'buy_items':
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.shop_buy_ix = (self.shop_buy_ix - 1) % len(SHOP_ITEMS)
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.shop_buy_ix = (self.shop_buy_ix + 1) % len(SHOP_ITEMS)
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                it = SHOP_ITEMS[self.shop_buy_ix]
+                if self.party.gold < it['price']:
+                    self.log.add("Not enough gold.")
+                    return
+                self.party.gold -= it['price']
+                self.party.inventory.append(it['id'])
+                self.log.add(f"Bought {it['name']}.")
+            elif event.key == pygame.K_ESCAPE:
+                self.shop_phase = 'menu'; self.shop_index = 0
+        # Phase: sell_items
+        else:
+            if event.key in (pygame.K_UP, pygame.K_k):
+                if self.party.inventory:
+                    self.shop_sell_item_ix = (self.shop_sell_item_ix - 1) % len(self.party.inventory)
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                if self.party.inventory:
+                    self.shop_sell_item_ix = (self.shop_sell_item_ix + 1) % len(self.party.inventory)
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.party.inventory:
+                    iid = self.party.inventory.pop(self.shop_sell_item_ix)
+                    it = ITEMS_BY_ID.get(iid, {"price": 10, "name": iid})
+                    sellp = int(it.get('price', 10) * 0.5)
+                    self.party.gold += sellp
+                    self.log.add(f"Sold {it.get('name', iid)} for {sellp}g.")
+                    if self.shop_sell_item_ix >= len(self.party.inventory):
+                        self.shop_sell_item_ix = max(0, len(self.party.inventory) - 1)
+            elif event.key == pygame.K_ESCAPE:
+                self.shop_phase = 'menu'; self.shop_index = 1
 
     def draw_temple(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -1809,7 +1933,7 @@ class Game:
         s.fill((0, 0, 0, 160))
         view.blit(s, (0, 0))
         self.r.text_big(view, "Menu", (WIDTH//2 - 40, 80))
-        opts = ["Status", "Items", "Close"]
+        opts = ["Status", "Items", "Equip", "Close"]
         y = 140
         for i, opt in enumerate(opts):
             prefix = "> " if i == self.pause_index else "  "
@@ -1819,19 +1943,27 @@ class Game:
     def pause_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.pause_index = (self.pause_index - 1) % 3
+                self.pause_index = (self.pause_index - 1) % 4
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.pause_index = (self.pause_index + 1) % 3
+                self.pause_index = (self.pause_index + 1) % 4
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 if self.pause_index == 0:
                     self.return_mode = MODE_PAUSE
                     self.mode = MODE_STATUS
                 elif self.pause_index == 1:
-                    self.items_phase = 'member'
-                    self.items_member_ix = 0
+                    # Items opened from Labyrinth; return to Maze when exiting
+                    self.return_mode = MODE_MAZE
+                    self.items_phase = 'items'
                     self.items_item_ix = 0
                     self.mode = MODE_ITEMS
                 elif self.pause_index == 2:
+                    self.equip_phase = 'member'
+                    self.equip_member_ix = 0
+                    self.equip_slot_ix = 0
+                    self.equip_choose_ix = 0
+                    self.return_mode = MODE_PAUSE
+                    self.mode = MODE_EQUIP
+                elif self.pause_index == 3:
                     self.mode = MODE_MAZE
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_MAZE
@@ -1840,22 +1972,9 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
         self.r.text_big(view, "Items", (20, 16))
-        if self.items_phase == 'member':
-            self.r.text_small(view, "Choose target (Enter)", (32, 46), LIGHT)
-            y = 66
+        if self.items_phase == 'items':
             actives = self.party.active_members()
-            for i, m in enumerate(actives):
-                prefix = "> " if i == self.items_member_ix else "  "
-                self.r.text(view, f"{prefix}{m.name}  HP {m.hp}/{m.max_hp}", (32, y), YELLOW if i == self.items_member_ix else WHITE)
-                y += 20
-            self.r.text_small(view, "Esc: Back", (32, y + 6), LIGHT)
-        else:
-            actives = self.party.active_members()
-            if not actives:
-                self.items_phase = 'member'
-                return
-            m = actives[self.items_member_ix % len(actives)]
-            self.r.text(view, f"Party items (target: {m.name}):", (32, 50))
+            self.r.text(view, f"Party items:", (32, 50))
             y = 72
             if not self.party.inventory:
                 self.r.text_small(view, "(none)", (40, y), LIGHT)
@@ -1864,25 +1983,18 @@ class Game:
                 prefix = "> " if i == self.items_item_ix else "  "
                 self.r.text(view, f"{prefix}{it['name']}", (32, y), YELLOW if i == self.items_item_ix else WHITE)
                 y += 20
-            self.r.text_small(view, "Enter: Use  Esc: Back", (32, y + 6), LIGHT)
+            self.r.text_small(view, "Enter: Actions  Esc: Back", (32, y + 6), LIGHT)
+        elif self.items_phase == 'item_action':
+            self.r.draw_center_menu(["Use", "Cancel"], self.items_action_ix)
+        elif self.items_phase == 'use_target':
+            actives = self.party.active_members()
+            opts = [m.name for m in actives] or ["(no active members)"]
+            self.r.draw_center_menu(opts + ["Back"], self.items_target_ix)
 
     def items_input(self, event):
         actives = self.party.active_members()
         if event.type == pygame.KEYDOWN:
-            if self.items_phase == 'member':
-                if event.key in (pygame.K_UP, pygame.K_k):
-                    if actives:
-                        self.items_member_ix = (self.items_member_ix - 1) % len(actives)
-                elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    if actives:
-                        self.items_member_ix = (self.items_member_ix + 1) % len(actives)
-                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    self.items_phase = 'items'
-                    self.items_item_ix = 0
-                elif event.key == pygame.K_ESCAPE:
-                    self.mode = MODE_PAUSE
-            else:
-                sel_member = actives[self.items_member_ix % len(actives)] if actives else None
+            if self.items_phase == 'items':
                 if event.key in (pygame.K_UP, pygame.K_k):
                     if self.party.inventory:
                         self.items_item_ix = (self.items_item_ix - 1) % len(self.party.inventory)
@@ -1890,16 +2002,60 @@ class Game:
                     if self.party.inventory:
                         self.items_item_ix = (self.items_item_ix + 1) % len(self.party.inventory)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if sel_member and self.party.inventory:
-                        iid = self.party.inventory[self.items_item_ix]
-                        self.use_item(sel_member, iid)
-                        it = ITEMS_BY_ID.get(iid, {})
-                        if it.get("type") == "consumable":
-                            self.party.inventory.pop(self.items_item_ix)
-                            if self.items_item_ix >= len(self.party.inventory):
-                                self.items_item_ix = max(0, len(self.party.inventory) - 1)
+                    if self.party.inventory:
+                        self.items_action_ix = 0
+                        self.items_phase = 'item_action'
                 elif event.key == pygame.K_ESCAPE:
-                    self.items_phase = 'member'
+                    # Return to the mode that opened Items (Town or Maze)
+                    self.mode = self.return_mode
+            elif self.items_phase == 'item_action':
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.items_action_ix = (self.items_action_ix - 1) % 2
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.items_action_ix = (self.items_action_ix + 1) % 2
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if not self.party.inventory:
+                        self.items_phase = 'items'
+                    else:
+                        iid = self.party.inventory[self.items_item_ix]
+                        it = ITEMS_BY_ID.get(iid, {})
+                        if self.items_action_ix == 0:  # Use
+                            if it.get('type') == 'consumable':
+                                # Choose a target among active members
+                                self.items_target_ix = 0
+                                self.items_phase = 'use_target'
+                            else:
+                                self.log.add("Cannot use that here.")
+                                self.items_phase = 'items'
+                        else:  # Cancel
+                            self.items_phase = 'items'
+                elif event.key == pygame.K_ESCAPE:
+                    self.items_phase = 'items'
+            else:  # use_target
+                n = max(1, len(actives) + 1)
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    self.items_target_ix = (self.items_target_ix - 1) % n
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    self.items_target_ix = (self.items_target_ix + 1) % n
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.items_target_ix == len(actives):
+                        self.items_phase = 'item_action'
+                    else:
+                        if self.party.inventory and actives:
+                            iid = self.party.inventory[self.items_item_ix]
+                            target = actives[self.items_target_ix]
+                            self.use_item(target, iid)
+                            it = ITEMS_BY_ID.get(iid, {})
+                            if it.get('type') == 'consumable':
+                                try:
+                                    self.party.inventory.pop(self.items_item_ix)
+                                except IndexError:
+                                    pass
+                                if self.items_item_ix >= len(self.party.inventory):
+                                    self.items_item_ix = max(0, len(self.party.inventory) - 1)
+                        self.items_phase = 'items'
+                elif event.key == pygame.K_ESCAPE:
+                    self.items_phase = 'item_action'
 
     def use_item(self, target: Character, iid: str):
         it = ITEMS_BY_ID.get(iid)
@@ -1910,6 +2066,172 @@ class Game:
             before = target.hp
             target.hp = min(target.max_hp, target.hp + it.get("heal", 0))
             self.log.add(f"{target.name} drinks a potion (+{target.hp - before} HP).")
+
+    # --------------- Equip ---------------
+    def _slot_name(self, ix: int) -> str:
+        return ["Weapon", "Armor", "Accessory 1", "Accessory 2"][ix]
+
+    def _equipped_label(self, m: Character, ix: int) -> str:
+        if ix == 0:
+            iid = m.equipment.weapon_id
+            if iid:
+                it = ITEMS_BY_ID.get(iid, {"name": iid, "atk": m.equipment.weapon_atk})
+                bonus = it.get('atk', m.equipment.weapon_atk)
+                return f"{it['name']} (+{bonus} ATK)"
+            return "(empty)"
+        if ix == 1:
+            iid = m.equipment.armor_id
+            if iid:
+                it = ITEMS_BY_ID.get(iid, {"name": iid, "ac": m.equipment.armor_ac})
+                bonus = it.get('ac', m.equipment.armor_ac)
+                return f"{it['name']} ({bonus:+} AC)"
+            return "(empty)"
+        iid = m.equipment.acc1_id if ix == 2 else m.equipment.acc2_id
+        if iid:
+            it = ITEMS_BY_ID.get(iid, {"name": iid})
+            return it.get('name', iid)
+        return "(empty)"
+
+    def draw_equip(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((18, 18, 24))
+        self.r.text_big(view, "Equip", (20, 16))
+        if self.equip_phase == 'member':
+            y = 60
+            for i, m in enumerate(self.party.members):
+                prefix = "> " if i == self.equip_member_ix else "  "
+                col = YELLOW if i == self.equip_member_ix else WHITE
+                self.r.text(view, f"{prefix}{m.name} Lv{m.level} {m.cls}", (32, y), col); y += 20
+            self.r.text_small(view, "Enter: Select  Esc: Back", (32, y + 6), LIGHT)
+        elif self.equip_phase == 'slot':
+            if not self.party.members:
+                self.equip_phase = 'member'; return
+            m = self.party.members[self.equip_member_ix % len(self.party.members)]
+            options = [
+                f"Weapon — {self._equipped_label(m,0)}",
+                f"Armor  — {self._equipped_label(m,1)}",
+                f"Acc 1  — {self._equipped_label(m,2)}",
+                f"Acc 2  — {self._equipped_label(m,3)}",
+            ]
+            self.r.draw_center_menu(options + ["Back"], self.equip_slot_ix)
+        else:  # choose
+            m = self.party.members[self.equip_member_ix % len(self.party.members)]
+            slot_ix = self.equip_slot_ix
+            # Filter inventory by slot
+            if slot_ix == 0:
+                pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'weapon']
+            elif slot_ix == 1:
+                pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'armor']
+            else:
+                pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'accessory']
+            options = [ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid) for iid in pool]
+            # Allow unequip when something is equipped
+            can_unequip = (
+                (slot_ix == 0 and m.equipment.weapon_id) or
+                (slot_ix == 1 and m.equipment.armor_id) or
+                (slot_ix == 2 and m.equipment.acc1_id) or
+                (slot_ix == 3 and m.equipment.acc2_id)
+            )
+            if can_unequip:
+                options = ["(Unequip)"] + options
+            options = options + ["Back"]
+            self.r.draw_center_menu(options, self.equip_choose_ix)
+
+    def _equip_apply(self, m: Character, slot_ix: int, iid: Optional[str]):
+        # Put currently equipped back to inventory
+        if slot_ix == 0:
+            if m.equipment.weapon_id:
+                self.party.inventory.append(m.equipment.weapon_id)
+            m.equipment.weapon_id = iid
+            m.equipment.weapon_atk = ITEMS_BY_ID.get(iid, {}).get('atk', 0) if iid else 0
+        elif slot_ix == 1:
+            if m.equipment.armor_id:
+                self.party.inventory.append(m.equipment.armor_id)
+            m.equipment.armor_id = iid
+            m.equipment.armor_ac = ITEMS_BY_ID.get(iid, {}).get('ac', 0) if iid else 0
+        elif slot_ix == 2:
+            if m.equipment.acc1_id:
+                self.party.inventory.append(m.equipment.acc1_id)
+            m.equipment.acc1_id = iid
+        else:
+            if m.equipment.acc2_id:
+                self.party.inventory.append(m.equipment.acc2_id)
+            m.equipment.acc2_id = iid
+
+    def equip_input(self, event):
+        if event.type != pygame.KEYDOWN:
+            return
+        if self.equip_phase == 'member':
+            n = max(1, len(self.party.members))
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.equip_member_ix = (self.equip_member_ix - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.equip_member_ix = (self.equip_member_ix + 1) % n
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.party.members:
+                    self.equip_phase = 'slot'
+                    self.equip_slot_ix = 0
+            elif event.key == pygame.K_ESCAPE:
+                self.mode = self.return_mode
+        elif self.equip_phase == 'slot':
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.equip_slot_ix = (self.equip_slot_ix - 1) % 5
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.equip_slot_ix = (self.equip_slot_ix + 1) % 5
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                # If Back selected
+                if self.equip_slot_ix == 4:
+                    self.equip_phase = 'member'
+                else:
+                    self.equip_phase = 'choose'
+                    self.equip_choose_ix = 0
+            elif event.key == pygame.K_ESCAPE:
+                self.equip_phase = 'member'
+        else:
+            # choose item to equip / unequip / back
+            m = self.party.members[self.equip_member_ix % len(self.party.members)]
+            slot_ix = self.equip_slot_ix
+            if slot_ix == 0:
+                pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'weapon']
+            elif slot_ix == 1:
+                pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'armor']
+            else:
+                pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'accessory']
+            can_unequip = (
+                (slot_ix == 0 and m.equipment.weapon_id) or
+                (slot_ix == 1 and m.equipment.armor_id) or
+                (slot_ix == 2 and m.equipment.acc1_id) or
+                (slot_ix == 3 and m.equipment.acc2_id)
+            )
+            list_len = len(pool) + 1 + (1 if can_unequip else 0)
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.equip_choose_ix = (self.equip_choose_ix - 1) % max(1, list_len)
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.equip_choose_ix = (self.equip_choose_ix + 1) % max(1, list_len)
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                # Back
+                if self.equip_choose_ix == list_len - 1:
+                    self.equip_phase = 'slot'
+                    return
+                # Unequip
+                if can_unequip and self.equip_choose_ix == 0:
+                    self._equip_apply(m, slot_ix, None)
+                    self.equip_phase = 'slot'
+                    return
+                # Equip selected
+                pick_ix = self.equip_choose_ix - (1 if can_unequip else 0)
+                if 0 <= pick_ix < len(pool):
+                    iid = pool[pick_ix]
+                    # remove from inventory and equip
+                    # remove first occurrence
+                    try:
+                        self.party.inventory.remove(iid)
+                    except ValueError:
+                        pass
+                    self._equip_apply(m, slot_ix, iid)
+                    self.equip_phase = 'slot'
+            elif event.key == pygame.K_ESCAPE:
+                self.equip_phase = 'slot'
 
     # --------------- Battle ---------------
     def battle_input(self, event):
@@ -1939,6 +2261,12 @@ class Game:
                         # open skill submenu
                         b.state = 'skillmenu'
                         b.skill_menu_index = 0
+                    elif chosen_id == 'item':
+                        # Only open if there are usable items
+                        if not b.usable_items():
+                            return
+                        b.state = 'itemmenu'
+                        b.item_menu_index = 0
                     elif chosen_id == 'run':
                         act = b.make_run_action()
                         b.start_animation(act)
@@ -2006,12 +2334,55 @@ class Game:
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         actor = b.current_actor()
                         target_gi = alive_gi[b.target_menu_index]
-                        act = b.make_heal_action(actor, target_gi)
+                        if b.target_mode.get('action') == 'heal':
+                            act = b.make_heal_action(actor, target_gi)
+                        elif b.target_mode.get('action') == 'item':
+                            iid = b.selected_item_iid
+                            act = b.make_item_use_action(actor, target_gi, iid) if iid else None
+                            # consume the item now
+                            if act and iid in self.party.inventory:
+                                try:
+                                    self.party.inventory.remove(iid)
+                                except ValueError:
+                                    pass
+                        else:
+                            act = None
                         if act:
                             b.start_animation(act)
                     elif event.key == pygame.K_ESCAPE:
                         # go back to combat menu
                         b.state = 'menu'
+            elif b.state == 'itemmenu':
+                items = b.usable_items()
+                n = max(1, len(items) + 1)  # +1 Back
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    b.item_menu_index = (b.item_menu_index - 1) % n
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    b.item_menu_index = (b.item_menu_index + 1) % n
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if b.item_menu_index == len(items):
+                        b.state = 'menu'
+                    else:
+                        b.selected_item_iid = items[b.item_menu_index]
+                        b.item_action_index = 0
+                        b.state = 'itemaction'
+                elif event.key == pygame.K_ESCAPE:
+                    b.state = 'menu'
+            elif b.state == 'itemaction':
+                if event.key in (pygame.K_UP, pygame.K_k):
+                    b.item_action_index = (b.item_action_index - 1) % 2
+                elif event.key in (pygame.K_DOWN, pygame.K_j):
+                    b.item_action_index = (b.item_action_index + 1) % 2
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if b.item_action_index == 0 and b.selected_item_iid:
+                        # choose party target for the item
+                        b.state = 'target'
+                        b.target_mode = {'side': 'party', 'action': 'item'}
+                        b.target_menu_index = 0
+                    else:
+                        b.state = 'itemmenu'
+                elif event.key == pygame.K_ESCAPE:
+                    b.state = 'itemmenu'
             
 
     def draw_battle(self):
@@ -2080,10 +2451,14 @@ class Game:
                 y += 16
         if b:
             if b.state == 'menu':
-                # Draw combat menu with disabled state for Skill when unavailable
+                # Draw combat menu with disabled state for Skill/Items when unavailable
                 labels = [label for _id, label in b.ui_menu_options]
-                disabled_idx = 1 if len(b.ui_menu_options) > 1 and not b.skill_options else -1
-                # Render like draw_center_menu but allow grayed option
+                disabled = set()
+                for i, (oid, _lab) in enumerate(b.ui_menu_options):
+                    if oid == 'skill' and not b.skill_options:
+                        disabled.add(i)
+                    if oid == 'item' and not b.usable_items():
+                        disabled.add(i)
                 options = labels
                 if options:
                     pad_x, pad_y = 12, 10
@@ -2099,7 +2474,7 @@ class Game:
                     cy = y + pad_y
                     for i, s in enumerate(options):
                         is_sel = (i == b.ui_menu_index)
-                        is_disabled = (i == disabled_idx)
+                        is_disabled = (i in disabled)
                         color = GRAY if is_disabled else (YELLOW if is_sel else WHITE)
                         prefix = "> " if is_sel else "  "
                         self.r.text(view, prefix + s, (x + pad_x, cy), color)
@@ -2108,6 +2483,13 @@ class Game:
                 opts = [label for _id, label in b.skill_options] or ["(No skills)"]
                 opts = opts + ["Back"]
                 self.r.draw_center_menu(opts, b.skill_menu_index)
+            elif b.state == 'itemmenu':
+                items = b.usable_items()
+                options = [ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid) for iid in items] or ["(no usable items)"]
+                options = options + ["Back"]
+                self.r.draw_center_menu(options, b.item_menu_index)
+            elif b.state == 'itemaction':
+                self.r.draw_center_menu(["Use", "Cancel"], b.item_action_index)
             elif b.state == 'target':
                 # No center menu in target selection; use highlights only
                 pass
@@ -2189,6 +2571,8 @@ class Game:
                         self.pause_input(event)
                     elif self.mode == MODE_ITEMS:
                         self.items_input(event)
+                    elif self.mode == MODE_EQUIP:
+                        self.equip_input(event)
                     elif self.mode == MODE_BATTLE:
                         self.battle_input(event)
 
@@ -2223,6 +2607,8 @@ class Game:
                     self.draw_maze(); self.draw_pause()
                 elif self.mode == MODE_ITEMS:
                     self.draw_items()
+                elif self.mode == MODE_EQUIP:
+                    self.draw_equip()
                 elif self.mode == MODE_BATTLE:
                     self.draw_battle()
 
