@@ -1130,7 +1130,11 @@ class Game:
         self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
         self.create_confirm_index = 0
         # Shop UI state
-        self.shop_phase = 'menu'  # 'menu' | 'buy_items' | 'buy_target' | 'sell_member' | 'sell_items'
+        self.shop_phase = 'menu'  # 'menu' | 'buy_items' | 'sell_items' | 'buy_confirm' | 'sell_confirm'
+        self.shop_confirm_ix = 1  # 0 Yes, 1 No
+        self.shop_pending_iid: Optional[str] = None
+        self.shop_pending_name: str = ''
+        self.shop_pending_gold: int = 0
         self.shop_index = 0       # generic index for current phase
         self.shop_buy_ix = 0
         self.shop_target_ix = 0
@@ -1741,6 +1745,18 @@ class Game:
                 self.shop_buy_ix = 0
             self.shop_buy_ix = self.shop_buy_ix % max(1, len(options))
             self.r.draw_center_menu(options, self.shop_buy_ix)
+        elif self.shop_phase == 'buy_confirm':
+            # Darken and show confirmation
+            s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            s.fill((0,0,0,160)); view.blit(s,(0,0))
+            name = self.shop_pending_name or 'Item'
+            gold = self.shop_pending_gold
+            msg = f"Do you want to buy {name} for {gold}g?"
+            tw = self.r.font_big.size(msg)[0]
+            tx = WIDTH//2 - tw//2
+            ty = VIEW_H//2 - 80
+            self.r.text_big(view, msg, (tx, ty))
+            self.r.draw_center_menu(["Yes","No"], self.shop_confirm_ix)
         else:  # sell_items
             # Condensed list with quantities, centered menu (names only)
             ordered: List[str] = []
@@ -1761,6 +1777,17 @@ class Game:
                 self.shop_sell_item_ix = 0
             self.shop_sell_item_ix = self.shop_sell_item_ix % max(1, len(options))
             self.r.draw_center_menu(options, self.shop_sell_item_ix)
+        if self.shop_phase == 'sell_confirm':
+            s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            s.fill((0,0,0,160)); view.blit(s,(0,0))
+            name = self.shop_pending_name or 'Item'
+            gold = self.shop_pending_gold
+            msg = f"Do you want to sell {name} for {gold}g?"
+            tw = self.r.font_big.size(msg)[0]
+            tx = WIDTH//2 - tw//2
+            ty = VIEW_H//2 - 80
+            self.r.text_big(view, msg, (tx, ty))
+            self.r.draw_center_menu(["Yes","No"], self.shop_confirm_ix)
 
     def shop_input(self, event):
         if event.type != pygame.KEYDOWN:
@@ -1782,8 +1809,7 @@ class Game:
                 self.mode = MODE_TOWN
         # Phase: buy_items
         elif self.shop_phase == 'buy_items':
-            # Use centered menu indices: len(SHOP_ITEMS) + 1 for Back
-            n = max(1, len(SHOP_ITEMS) + 1)
+            n = max(1, len(SHOP_ITEMS) + 1)  # +1 Back
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.shop_buy_ix = (self.shop_buy_ix - 1) % n
             elif event.key in (pygame.K_DOWN, pygame.K_j):
@@ -1793,22 +1819,37 @@ class Game:
                     self.shop_phase = 'menu'; self.shop_index = 0
                 else:
                     it = SHOP_ITEMS[self.shop_buy_ix]
-                    if self.party.gold < it.get('price', 0):
-                        self.log.add("Not enough gold.")
-                        return
-                    self.party.gold -= it.get('price', 0)
-                    self.party.inventory.append(it.get('id', ''))
-                    self.log.add(f"Bought {it.get('name', 'Item')}.")
+                    self.shop_pending_iid = it.get('id', '')
+                    self.shop_pending_name = it.get('name', 'Item')
+                    self.shop_pending_gold = int(it.get('price', 0))
+                    self.shop_confirm_ix = 1
+                    self.shop_phase = 'buy_confirm'
             elif event.key == pygame.K_ESCAPE:
                 self.shop_phase = 'menu'; self.shop_index = 0
+        # Phase: buy_confirm
+        elif self.shop_phase == 'buy_confirm':
+            if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
+                self.shop_confirm_ix = 1 - self.shop_confirm_ix
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.shop_confirm_ix == 0:
+                    price = self.shop_pending_gold
+                    if self.party.gold < price:
+                        self.log.add("Not enough gold.")
+                    else:
+                        self.party.gold -= price
+                        if self.shop_pending_iid:
+                            self.party.inventory.append(self.shop_pending_iid)
+                        self.log.add(f"Bought {self.shop_pending_name}.")
+                self.shop_phase = 'buy_items'
+            elif event.key == pygame.K_ESCAPE:
+                self.shop_phase = 'buy_items'
         # Phase: sell_items
-        else:
-            # Condensed navigation over unique IDs + Back
+        elif self.shop_phase == 'sell_items':
             seen=set(); ordered=[]
             for iid in self.party.inventory:
                 if iid not in seen:
                     seen.add(iid); ordered.append(iid)
-            n = max(1, len(ordered) + 1)
+            n = max(1, len(ordered) + 1)  # +1 Back
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.shop_sell_item_ix = (self.shop_sell_item_ix - 1) % n
             elif event.key in (pygame.K_DOWN, pygame.K_j):
@@ -1820,23 +1861,30 @@ class Game:
                     if not ordered:
                         return
                     iid_sel = ordered[self.shop_sell_item_ix]
-                    # Remove a single instance
-                    try:
-                        self.party.inventory.remove(iid_sel)
-                    except ValueError:
-                        pass
                     it = ITEMS_BY_ID.get(iid_sel, {"price": 10, "name": iid_sel})
                     sellp = int(it.get('price', 10) * 0.5)
-                    self.party.gold += sellp
-                    self.log.add(f"Sold {it.get('name', iid_sel)} for {sellp}g.")
-                    # Clamp index within new condensed length
-                    seen=set(); ordered2=[]
-                    for iid in self.party.inventory:
-                        if iid not in seen:
-                            seen.add(iid); ordered2.append(iid)
-                    self.shop_sell_item_ix = min(self.shop_sell_item_ix, max(0, len(ordered2)))
+                    self.shop_pending_iid = iid_sel
+                    self.shop_pending_name = it.get('name', iid_sel)
+                    self.shop_pending_gold = sellp
+                    self.shop_confirm_ix = 1
+                    self.shop_phase = 'sell_confirm'
             elif event.key == pygame.K_ESCAPE:
                 self.shop_phase = 'menu'; self.shop_index = 1
+        # Phase: sell_confirm
+        elif self.shop_phase == 'sell_confirm':
+            if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
+                self.shop_confirm_ix = 1 - self.shop_confirm_ix
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.shop_confirm_ix == 0:
+                    try:
+                        self.party.inventory.remove(self.shop_pending_iid or '')
+                    except ValueError:
+                        pass
+                    self.party.gold += int(self.shop_pending_gold)
+                    self.log.add(f"Sold {self.shop_pending_name} for {self.shop_pending_gold}g.")
+                self.shop_phase = 'sell_items'
+            elif event.key == pygame.K_ESCAPE:
+                self.shop_phase = 'sell_items'
 
     def draw_temple(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
