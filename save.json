@@ -54,7 +54,7 @@
           "armor_ac": 0,
           "weapon_id": "sword_basic",
           "armor_id": null,
-          "acc1_id": null,
+          "acc1_id": "boots",
           "acc2_id": null
         },
         "inventory": []
@@ -83,7 +83,7 @@
           "armor_ac": 0,
           "weapon_id": null,
           "armor_id": null,
-          "acc1_id": null,
+          "acc1_id": "helm",
           "acc2_id": null
         },
         "inventory": []
@@ -124,8 +124,11 @@
       2,
       3
     ],
-    "gold": 303,
-    "inventory": []
+    "gold": 173,
+    "inventory": [
+      "potion_small",
+      "potion_small"
+    ]
   },
   "pos": [
     2,
