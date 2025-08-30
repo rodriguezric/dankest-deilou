@@ -1146,6 +1146,7 @@ class Game:
         self.items_item_ix = 0
         self.items_action_ix = 0
         self.items_target_ix = 0
+        self.items_selected_iid: Optional[str] = None
 
         # Equip UI state
         self.equip_phase = 'member'  # 'member' | 'slot' | 'choose'
@@ -1733,23 +1734,33 @@ class Game:
                 self.r.text(view, f"{prefix}{s}", (32, y), col); y += 22
             self.r.text_small(view, "Enter: Select  Esc: Back", (32, y + 4), LIGHT)
         elif self.shop_phase == 'buy_items':
-            for i, it in enumerate(SHOP_ITEMS):
-                prefix = "> " if i == self.shop_buy_ix else "  "
-                col = YELLOW if i == self.shop_buy_ix else WHITE
-                self.r.text(view, f"{prefix}{it['name']} — {it['price']}g", (32, y), col); y += 20
-            self.r.text_small(view, "Enter: Buy  Esc: Back", (32, y + 4), LIGHT)
+            # Centered menu: item names only + Back
+            labels = [it.get('name', it.get('id', 'Item')) for it in SHOP_ITEMS]
+            options = labels + ["Back"] if labels else ["Back"]
+            if not hasattr(self, 'shop_buy_ix'):
+                self.shop_buy_ix = 0
+            self.shop_buy_ix = self.shop_buy_ix % max(1, len(options))
+            self.r.draw_center_menu(options, self.shop_buy_ix)
         else:  # sell_items
-            self.r.text(view, f"Sell items — Party", (32, 50))
-            if not self.party.inventory:
-                self.r.text_small(view, "(no items)", (32, y), LIGHT)
-            else:
-                for i, iid in enumerate(self.party.inventory):
-                    it = ITEMS_BY_ID.get(iid, {"name": iid, "price": 10})
-                    sellp = int(it.get('price', 10) * 0.5)
-                    prefix = "> " if i == self.shop_sell_item_ix else "  "
-                    col = YELLOW if i == self.shop_sell_item_ix else WHITE
-                    self.r.text(view, f"{prefix}{it['name']} — {sellp}g", (32, y), col); y += 20
-            self.r.text_small(view, "Enter: Sell  Esc: Back", (32, y + 6), LIGHT)
+            # Condensed list with quantities, centered menu (names only)
+            ordered: List[str] = []
+            counts: Dict[str, int] = {}
+            for iid in self.party.inventory:
+                if iid not in counts:
+                    counts[iid] = 1
+                    ordered.append(iid)
+                else:
+                    counts[iid] += 1
+            labels = []
+            for iid in ordered:
+                name = ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid)
+                c = counts.get(iid, 1)
+                labels.append(f"{name} x{c}" if c > 1 else name)
+            options = labels + ["Back"] if labels else ["Back"]
+            if not hasattr(self, 'shop_sell_item_ix'):
+                self.shop_sell_item_ix = 0
+            self.shop_sell_item_ix = self.shop_sell_item_ix % max(1, len(options))
+            self.r.draw_center_menu(options, self.shop_sell_item_ix)
 
     def shop_input(self, event):
         if event.type != pygame.KEYDOWN:
@@ -1771,37 +1782,59 @@ class Game:
                 self.mode = MODE_TOWN
         # Phase: buy_items
         elif self.shop_phase == 'buy_items':
+            # Use centered menu indices: len(SHOP_ITEMS) + 1 for Back
+            n = max(1, len(SHOP_ITEMS) + 1)
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.shop_buy_ix = (self.shop_buy_ix - 1) % len(SHOP_ITEMS)
+                self.shop_buy_ix = (self.shop_buy_ix - 1) % n
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.shop_buy_ix = (self.shop_buy_ix + 1) % len(SHOP_ITEMS)
+                self.shop_buy_ix = (self.shop_buy_ix + 1) % n
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                it = SHOP_ITEMS[self.shop_buy_ix]
-                if self.party.gold < it['price']:
-                    self.log.add("Not enough gold.")
-                    return
-                self.party.gold -= it['price']
-                self.party.inventory.append(it['id'])
-                self.log.add(f"Bought {it['name']}.")
+                if self.shop_buy_ix == len(SHOP_ITEMS):
+                    self.shop_phase = 'menu'; self.shop_index = 0
+                else:
+                    it = SHOP_ITEMS[self.shop_buy_ix]
+                    if self.party.gold < it.get('price', 0):
+                        self.log.add("Not enough gold.")
+                        return
+                    self.party.gold -= it.get('price', 0)
+                    self.party.inventory.append(it.get('id', ''))
+                    self.log.add(f"Bought {it.get('name', 'Item')}.")
             elif event.key == pygame.K_ESCAPE:
                 self.shop_phase = 'menu'; self.shop_index = 0
         # Phase: sell_items
         else:
+            # Condensed navigation over unique IDs + Back
+            seen=set(); ordered=[]
+            for iid in self.party.inventory:
+                if iid not in seen:
+                    seen.add(iid); ordered.append(iid)
+            n = max(1, len(ordered) + 1)
             if event.key in (pygame.K_UP, pygame.K_k):
-                if self.party.inventory:
-                    self.shop_sell_item_ix = (self.shop_sell_item_ix - 1) % len(self.party.inventory)
+                self.shop_sell_item_ix = (self.shop_sell_item_ix - 1) % n
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                if self.party.inventory:
-                    self.shop_sell_item_ix = (self.shop_sell_item_ix + 1) % len(self.party.inventory)
+                self.shop_sell_item_ix = (self.shop_sell_item_ix + 1) % n
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if self.party.inventory:
-                    iid = self.party.inventory.pop(self.shop_sell_item_ix)
-                    it = ITEMS_BY_ID.get(iid, {"price": 10, "name": iid})
+                if self.shop_sell_item_ix == len(ordered):
+                    self.shop_phase = 'menu'; self.shop_index = 1
+                else:
+                    if not ordered:
+                        return
+                    iid_sel = ordered[self.shop_sell_item_ix]
+                    # Remove a single instance
+                    try:
+                        self.party.inventory.remove(iid_sel)
+                    except ValueError:
+                        pass
+                    it = ITEMS_BY_ID.get(iid_sel, {"price": 10, "name": iid_sel})
                     sellp = int(it.get('price', 10) * 0.5)
                     self.party.gold += sellp
-                    self.log.add(f"Sold {it.get('name', iid)} for {sellp}g.")
-                    if self.shop_sell_item_ix >= len(self.party.inventory):
-                        self.shop_sell_item_ix = max(0, len(self.party.inventory) - 1)
+                    self.log.add(f"Sold {it.get('name', iid_sel)} for {sellp}g.")
+                    # Clamp index within new condensed length
+                    seen=set(); ordered2=[]
+                    for iid in self.party.inventory:
+                        if iid not in seen:
+                            seen.add(iid); ordered2.append(iid)
+                    self.shop_sell_item_ix = min(self.shop_sell_item_ix, max(0, len(ordered2)))
             elif event.key == pygame.K_ESCAPE:
                 self.shop_phase = 'menu'; self.shop_index = 1
 
@@ -2141,19 +2174,28 @@ class Game:
     def draw_items(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
-        self.r.text_big(view, "Items", (20, 16))
+        # Header
+        self.r.text_big(view, "Party Items", (20, 16))
+        # Centered menu interface for Items
         if self.items_phase == 'items':
-            actives = self.party.active_members()
-            self.r.text(view, f"Party items:", (32, 50))
-            y = 72
-            if not self.party.inventory:
-                self.r.text_small(view, "(none)", (40, y), LIGHT)
-            for i, iid in enumerate(self.party.inventory):
-                it = ITEMS_BY_ID.get(iid, {"name": iid})
-                prefix = "> " if i == self.items_item_ix else "  "
-                self.r.text(view, f"{prefix}{it['name']}", (32, y), YELLOW if i == self.items_item_ix else WHITE)
-                y += 20
-            self.r.text_small(view, "Enter: Actions  Esc: Back", (32, y + 6), LIGHT)
+            # Build condensed inventory with quantities, preserving order of first appearance
+            ordered: List[str] = []
+            counts: Dict[str, int] = {}
+            for iid in self.party.inventory:
+                if iid not in counts:
+                    counts[iid] = 1
+                    ordered.append(iid)
+                else:
+                    counts[iid] += 1
+            labels = []
+            for iid in ordered:
+                name = ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid)
+                c = counts.get(iid, 1)
+                labels.append(f"{name} x{c}" if c > 1 else name)
+            options = labels + ["Back"]
+            # Clamp index into range (ordered + Back)
+            self.items_item_ix = self.items_item_ix % max(1, len(ordered) + 1)
+            self.r.draw_center_menu(options, self.items_item_ix)
         elif self.items_phase == 'item_action':
             self.r.draw_center_menu(["Use", "Cancel"], self.items_action_ix)
         elif self.items_phase == 'use_target':
@@ -2165,14 +2207,27 @@ class Game:
         actives = self.party.active_members()
         if event.type == pygame.KEYDOWN:
             if self.items_phase == 'items':
+                # Condensed inventory for navigation
+                ordered: List[str] = []
+                counts: Dict[str, int] = {}
+                for iid in self.party.inventory:
+                    if iid not in counts:
+                        counts[iid] = 1
+                        ordered.append(iid)
+                    else:
+                        counts[iid] += 1
+                n = max(1, len(ordered) + 1)  # +1 for Back
                 if event.key in (pygame.K_UP, pygame.K_k):
-                    if self.party.inventory:
-                        self.items_item_ix = (self.items_item_ix - 1) % len(self.party.inventory)
+                    self.items_item_ix = (self.items_item_ix - 1) % n
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    if self.party.inventory:
-                        self.items_item_ix = (self.items_item_ix + 1) % len(self.party.inventory)
+                    self.items_item_ix = (self.items_item_ix + 1) % n
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if self.party.inventory:
+                    # If Back selected, return to previous mode
+                    if self.items_item_ix == len(ordered):
+                        self.mode = self.return_mode
+                    else:
+                        # Store selected iid from condensed list
+                        self.items_selected_iid = ordered[self.items_item_ix]
                         self.items_action_ix = 0
                         self.items_phase = 'item_action'
                 elif event.key == pygame.K_ESCAPE:
@@ -2184,10 +2239,11 @@ class Game:
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     self.items_action_ix = (self.items_action_ix + 1) % 2
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if not self.party.inventory:
+                    # If no items, go back
+                    if not self.party.inventory or not self.items_selected_iid:
                         self.items_phase = 'items'
                     else:
-                        iid = self.party.inventory[self.items_item_ix]
+                        iid = self.items_selected_iid
                         it = ITEMS_BY_ID.get(iid, {})
                         if self.items_action_ix == 0:  # Use
                             if it.get('type') == 'consumable':
@@ -2211,18 +2267,27 @@ class Game:
                     if self.items_target_ix == len(actives):
                         self.items_phase = 'item_action'
                     else:
-                        if self.party.inventory and actives:
-                            iid = self.party.inventory[self.items_item_ix]
+                        if self.party.inventory and actives and self.items_selected_iid:
+                            iid = self.items_selected_iid
                             target = actives[self.items_target_ix]
                             self.use_item(target, iid)
                             it = ITEMS_BY_ID.get(iid, {})
                             if it.get('type') == 'consumable':
+                                # remove a single instance of the used item
                                 try:
-                                    self.party.inventory.pop(self.items_item_ix)
-                                except IndexError:
+                                    self.party.inventory.remove(iid)
+                                except ValueError:
                                     pass
-                                if self.items_item_ix >= len(self.party.inventory):
-                                    self.items_item_ix = max(0, len(self.party.inventory) - 1)
+                                # Clamp selection to condensed list length
+                                ordered_after = []
+                                seen = set()
+                                for j in self.party.inventory:
+                                    if j not in seen:
+                                        seen.add(j); ordered_after.append(j)
+                                if ordered_after:
+                                    self.items_item_ix = min(self.items_item_ix, len(ordered_after) - 1)
+                                else:
+                                    self.items_item_ix = 0
                         self.items_phase = 'items'
                 elif event.key == pygame.K_ESCAPE:
                     self.items_phase = 'item_action'
