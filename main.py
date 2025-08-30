@@ -2425,17 +2425,27 @@ class Game:
                 dying_prog[i] = p
         enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog) if b else {}
         party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting)
-        # Turn order panel on the left
+        # Turn order panel on the left (vertically centered, padded)
         if b and b.turn_order:
-            x0, y0 = 12, 18
-            # Background panel
-            panel_w = 180
+            inner_px, inner_py = 10, 10
+            header = "Turn Order"
+            line_h = self.r.font_small.get_height()
+            header_h = line_h
             lines = min(8, len(b.turn_order))
-            panel_h = 18 + lines * 16
-            pygame.draw.rect(view, (16, 16, 20), pygame.Rect(x0 - 8, y0 - 8, panel_w, panel_h))
-            pygame.draw.rect(view, YELLOW, pygame.Rect(x0 - 8, y0 - 8, panel_w, panel_h), 1)
-            self.r.text_small(view, "Turn Order", (x0, y0 - 2), LIGHT)
-            y = y0 + 14
+            panel_w = 180
+            panel_h = inner_py + header_h + 6 + lines * line_h + inner_py
+            rect_x = 12
+            rect_y = max(0, VIEW_H // 2 - panel_h // 2)
+            panel_rect = pygame.Rect(rect_x, rect_y, panel_w, panel_h)
+            pygame.draw.rect(view, (16, 16, 20), panel_rect)
+            pygame.draw.rect(view, YELLOW, panel_rect, 1)
+            # Header
+            hx = rect_x + inner_px
+            hy = rect_y + inner_py
+            self.r.text_small(view, header, (hx, hy), LIGHT)
+            # Lines
+            y = hy + header_h + 6
+            x = hx
             for off in range(lines):
                 pos = (b.turn_pos + off) % len(b.turn_order)
                 side, ix = b.turn_order[pos]
@@ -2447,8 +2457,8 @@ class Game:
                     label = "?"
                 pre = "> " if off == 0 else "  "
                 col = YELLOW if off == 0 else WHITE
-                self.r.text_small(view, pre + label, (x0, y), col)
-                y += 16
+                self.r.text_small(view, pre + label, (x, y), col)
+                y += line_h
         if b:
             if b.state == 'menu':
                 # Draw combat menu with disabled state for Skill/Items when unavailable
