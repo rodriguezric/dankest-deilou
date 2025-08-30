@@ -57,9 +57,12 @@ MODE_TEMPLE = "TEMPLE"
 MODE_TRAINING = "TRAINING"
 MODE_MAZE = "MAZE"
 MODE_BATTLE = "BATTLE"
+MODE_VICTORY = "VICTORY"
+MODE_DEFEAT = "DEFEAT"
 MODE_SAVELOAD = "SAVELOAD"
 MODE_PAUSE = "PAUSE"
 MODE_ITEMS = "ITEMS"
+MODE_COMBAT_INTRO = "COMBAT_INTRO"
 MODE_EQUIP = "EQUIP"
 
 # Temple costs
@@ -652,7 +655,6 @@ class Battle:
         self.log.add(f"Ambushed by {', '.join(e.name for e in self.enemies)}!")
         self.build_turn_order()
         self.turn_pos = 0
-        self.next_turn()
 
     def build_turn_order(self):
         # Build mixed initiative order by AGI (descending). Ties: party before enemy, then index.
@@ -973,6 +975,9 @@ class Battle:
         # Gold now goes to the party pool
         self.party.gold += total_gold
         self.log.add(f"Victory! +~{total_exp} EXP, +~{total_gold}g (party)")
+        # Record for victory screen
+        self.victory_exp = total_exp
+        self.victory_gold = total_gold
         self.battle_over = True
         self.result = 'victory'
 
@@ -1064,6 +1069,11 @@ class Game:
         self.facing = 1
         self.effects = HitEffects()
         self.in_battle: Optional[Battle] = None
+        # Battle intro transition
+        self.combat_intro_active: bool = False
+        self.combat_intro_stage: int = 0  # 0 flash1, 1 pause, 2 flash2, 3 fade
+        self.combat_intro_t0: int = 0
+        self.combat_intro_done_triggered: bool = False
 
         self.menu_index = 0
         self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
@@ -1111,6 +1121,10 @@ class Game:
         self.temple_revive_index = 0
 
         self.encounter_rate = 0.22
+        # Victory screen info
+        self.victory_info: Dict[str, Any] = {}
+        # Defeat screen fade
+        self.defeat_t0: int = 0
 
     # --------------- Save/Load ---------------
     def save(self, path="save.json"):
@@ -1920,12 +1934,26 @@ class Game:
     def start_battle(self):
         self.in_battle = Battle(self.party, self.log, self.effects)
         self.in_battle.start_random()
-        self.mode = MODE_BATTLE
+        # Begin transition on the labyrinth view first
+        self.mode = MODE_COMBAT_INTRO
+        self.combat_intro_active = True
+        self.combat_intro_stage = 0  # flashes happen in maze
+        self.combat_intro_t0 = pygame.time.get_ticks()
+        self.combat_intro_done_triggered = False
 
     def draw_maze(self):
         self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix)
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         self.r.text_small(view, "Esc: Menu  ↑: Move  ←/→: Turn", (12, VIEW_H - 22), LIGHT)
+        # During combat intro flashes, overlay on maze
+        if self.mode == MODE_COMBAT_INTRO and self.combat_intro_active:
+            now = pygame.time.get_ticks()
+            t = now - self.combat_intro_t0
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            if self.combat_intro_stage in (0, 2):
+                alpha = 220 if (self.combat_intro_stage == 0 and t < 180) or (self.combat_intro_stage == 2 and t < 180) else 0
+                overlay.fill((255, 255, 255, alpha))
+            view.blit(overlay, (0, 0))
 
     def maze_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -2516,28 +2544,86 @@ class Game:
             elif b.state == 'target':
                 # No center menu in target selection; use highlights only
                 pass
+        # Overlay combat intro transition: two white flashes then black fade
+        if self.combat_intro_active:
+            now = pygame.time.get_ticks()
+            t = now - self.combat_intro_t0
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            if self.combat_intro_stage in (0, 2):
+                # white flash
+                alpha = 200 if t < 120 else 0
+                overlay.fill((255, 255, 255, alpha))
+            elif self.combat_intro_stage == 3:
+                # fade from black to transparent
+                # at t=0 alpha=255, at t=500 alpha=0
+                alpha = max(0, 255 - int(255 * (t / 500.0)))
+                overlay.fill((0, 0, 0, alpha))
+            view.blit(overlay, (0, 0))
+
+    # --------------- Victory Screen ---------------
+    def draw_victory(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((10, 14, 10))
+        # Panel
+        pad_x, pad_y = 14, 12
+        lines = [
+            "Victory!",
+            f"EXP gained: {self.victory_info.get('exp', 0)}",
+            f"Gold found: {self.victory_info.get('gold', 0)}g",
+        ]
+        text_h = self.r.font.get_height()
+        w = max(self.r.font_big.size(lines[0])[0], max(self.r.font.size(l)[0] for l in lines[1:])) + pad_x * 2
+        h = text_h * (len(lines) + 2) + pad_y * 2 + 12
+        x = WIDTH // 2 - w // 2
+        y = VIEW_H // 2 - h // 2
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(view, (16, 24, 16), rect)
+        pygame.draw.rect(view, YELLOW, rect, 2)
+        # Title
+        self.r.text_big(view, lines[0], (x + pad_x, y + pad_y), YELLOW)
+        cy = y + pad_y + text_h + 8
+        for ln in lines[1:]:
+            self.r.text(view, ln, (x + pad_x, cy))
+            cy += text_h
+        self.r.text_small(view, "Enter: Continue", (x + pad_x, cy + 8), LIGHT)
+
+    def draw_defeat(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((8, 8, 10))
         now = pygame.time.get_ticks()
-        for f in (b.floaters if b else []):
-            rect = None
-            if f['side'] == 'party':
-                rect = party_rects.get(f['index'])
-            else:
-                rect = enemy_rects.get(f['index'])
-            if not rect:
-                continue
-            t = now - f['start']
-            p = max(0.0, min(1.0, t / f['dur']))
-            # Lower starting positions inside the panel
-            base = rect.top + 26
-            # Start MISS even lower for readability
-            if str(f.get('text','')).upper() == 'MISS':
-                base = rect.top + 34
-            y = base - int(20 * p)
-            alpha = max(0, 255 - int(255 * p))
-            color = f.get('color', WHITE)
-            surf = self.r.font_big.render(str(f['text']), True, color)
-            surf.set_alpha(alpha)
-            view.blit(surf, (rect.centerx - surf.get_width() // 2, y))
+        t = now - self.defeat_t0
+        dur = 900
+        alpha = max(0, min(255, int(255 * (t / dur))))
+        overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, alpha))
+        view.blit(overlay, (0, 0))
+        pad_x, pad_y = 14, 12
+        title = "Defeat..."
+        msg = "Your party has fallen."
+        text_h = self.r.font.get_height()
+        w = max(self.r.font_big.size(title)[0], self.r.font.size(msg)[0]) + pad_x * 2
+        h = text_h * 3 + pad_y * 2 + 12
+        x = WIDTH // 2 - w // 2
+        y = VIEW_H // 2 - h // 2
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(view, (18, 12, 12), rect)
+        pygame.draw.rect(view, RED, rect, 2)
+        self.r.text_big(view, title, (x + pad_x, y + pad_y), RED)
+        self.r.text(view, msg, (x + pad_x, y + pad_y + text_h + 6))
+        self.r.text_small(view, "Enter: Return to Title", (x + pad_x, y + pad_y + text_h * 2 + 12), LIGHT)
+
+    def defeat_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
+                self.title_index = 0
+                self.mode = MODE_TITLE
+
+    def victory_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
+                # Return to labyrinth after victory
+                self.mode = MODE_MAZE
+        # no-op additional rendering in victory input
 
     # --------------- Gold helpers ---------------
     def total_gold(self) -> int:
@@ -2552,13 +2638,43 @@ class Game:
     def update(self):
         # progress typewriter for message log every frame
         self.log.update()
-        if self.mode == MODE_BATTLE and self.in_battle:
+        # Handle combat intro sequence across modes
+        if self.combat_intro_active:
+            now = pygame.time.get_ticks()
+            dt = now - self.combat_intro_t0
+            # Longer timings: flashes 180ms each, pause 150ms, fade 700ms
+            if self.mode == MODE_COMBAT_INTRO:
+                if self.combat_intro_stage == 0 and dt >= 180:
+                    self.combat_intro_stage = 1; self.combat_intro_t0 = now
+                elif self.combat_intro_stage == 1 and dt >= 150:
+                    self.combat_intro_stage = 2; self.combat_intro_t0 = now
+                elif self.combat_intro_stage == 2 and dt >= 180:
+                    # Switch to battle and begin fade
+                    self.mode = MODE_BATTLE
+                    self.combat_intro_stage = 3
+                    self.combat_intro_t0 = now
+            elif self.mode == MODE_BATTLE:
+                if self.combat_intro_stage == 3 and dt >= 700:
+                    self.combat_intro_active = False
+        # Drive battle normally when in battle and not during intro
+        if self.mode == MODE_BATTLE and self.in_battle and not self.combat_intro_active:
             self.in_battle.update()
+            # Kick off first turn once after intro completes
+            if not self.combat_intro_done_triggered:
+                self.combat_intro_done_triggered = True
+                self.in_battle.next_turn()
             if self.in_battle.battle_over:
-                if self.in_battle.result in ('victory', 'fled'):
+                if self.in_battle.result == 'victory':
+                    # Capture victory results for display
+                    exp = getattr(self.in_battle, 'victory_exp', 0)
+                    gold = getattr(self.in_battle, 'victory_gold', 0)
+                    self.victory_info = {'exp': exp, 'gold': gold}
+                    self.mode = MODE_VICTORY
+                elif self.in_battle.result == 'fled':
                     self.mode = MODE_MAZE
                 else:
-                    self.mode = MODE_TOWN
+                    self.defeat_t0 = pygame.time.get_ticks()
+                    self.mode = MODE_DEFEAT
 
     def run(self):
         running = True
@@ -2596,6 +2712,10 @@ class Game:
                         self.items_input(event)
                     elif self.mode == MODE_EQUIP:
                         self.equip_input(event)
+                    elif self.mode == MODE_DEFEAT:
+                        self.defeat_input(event)
+                    elif self.mode == MODE_VICTORY:
+                        self.victory_input(event)
                     elif self.mode == MODE_BATTLE:
                         self.battle_input(event)
 
@@ -2608,6 +2728,9 @@ class Game:
                 self.r.draw_frame()
                 if self.mode == MODE_TOWN:
                     self.draw_town()
+                elif self.mode == MODE_COMBAT_INTRO:
+                    # Show maze background during intro flashes
+                    self.draw_maze()
                 elif self.mode == MODE_PARTY:
                     self.draw_party()
                 elif self.mode == MODE_FORM:
@@ -2632,6 +2755,10 @@ class Game:
                     self.draw_items()
                 elif self.mode == MODE_EQUIP:
                     self.draw_equip()
+                elif self.mode == MODE_DEFEAT:
+                    self.draw_defeat()
+                elif self.mode == MODE_VICTORY:
+                    self.draw_victory()
                 elif self.mode == MODE_BATTLE:
                     self.draw_battle()
 
