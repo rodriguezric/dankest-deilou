@@ -2671,7 +2671,8 @@ class Game:
     def draw_battle(self):
         b = self.in_battle
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
-        view.fill((12, 12, 18))
+        # Slightly brighter base to make background more visible
+        view.fill((14, 14, 22))
         # Background: subtle ripple rings (like water drips)
         self.draw_battle_ripples(view)
         party_highlight = set()
@@ -2868,26 +2869,41 @@ class Game:
                 view.blit(surf, (rect.centerx - surf.get_width() // 2, y))
 
     def draw_battle_ripples(self, surf: pygame.Surface):
-        # Draw a few faint, animated rings that expand/contract subtly.
+        # Draw animated ripple rings and soft sine-wave bands to make the battle
+        # background slightly more visible and wavy, while staying subtle.
         now = pygame.time.get_ticks() / 1000.0
-        # Create a transparent surface for additive-like layering
-        overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
-        # Parameters
+        # Ripple rings ------------------------------------------------------
+        rings = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
         base_radius = 28
         ring_gap = 34
-        speed = 0.85
-        amp = 10
-        color = (120, 140, 220, 22)  # soft bluish alpha
+        speed = 0.9
+        amp = 12
+        ring_color = (120, 140, 220, 36)  # increased alpha for visibility
         for cx, cy in self.ripple_centers:
-            # draw 3 rings per center
             for k in range(3):
-                # phase-shift each ring
                 r = base_radius + k * ring_gap + int(amp * (1.0 + math.sin(now * speed + k * 1.8)) * 0.5)
-                # Outer circle (thin)
-                pygame.draw.circle(overlay, color, (cx, cy), max(2, r), 1)
-        # Very faint global fade to keep it subtle
-        overlay.set_alpha(90)
-        surf.blit(overlay, (0, 0))
+                pygame.draw.circle(rings, ring_color, (cx, cy), max(2, r), 2)
+        rings.set_alpha(120)
+        surf.blit(rings, (0, 0))
+
+        # Wavy horizontal bands --------------------------------------------
+        waves = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        band_h = 52
+        band_amp = 24
+        band_speed = 0.6
+        wave_colors = [
+            (60, 80, 160, 34),
+            (40, 60, 140, 28),
+            (80, 100, 180, 24),
+        ]
+        for i, col in enumerate(wave_colors):
+            # base center distributed vertically
+            base_y = int(VIEW_H * (i + 1) / (len(wave_colors) + 1))
+            cy = base_y + int(math.sin(now * band_speed + i * 1.7) * band_amp)
+            rect = pygame.Rect(0, max(0, cy - band_h // 2), WIDTH, band_h)
+            pygame.draw.rect(waves, col, rect)
+        waves.set_alpha(110)
+        surf.blit(waves, (0, 0))
 
     # --------------- Victory Screen ---------------
     def draw_victory(self):
