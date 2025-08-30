@@ -626,7 +626,9 @@
     ]
   ],
   "encounters": {
-    "monsters": [],
+    "monsters": [
+      "skeleton"
+    ],
     "group": [
       1,
       3

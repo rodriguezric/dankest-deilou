@@ -626,7 +626,10 @@
     ]
   ],
   "encounters": {
-    "monsters": [],
+    "monsters": [
+      "giant_rat",
+      "goblin"
+    ],
     "group": [
       1,
       3

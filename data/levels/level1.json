@@ -626,7 +626,10 @@
     ]
   ],
   "encounters": {
-    "monsters": [],
+    "monsters": [
+      "goblin",
+      "kobold"
+    ],
     "group": [
       1,
       3
