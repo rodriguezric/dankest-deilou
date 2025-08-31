@@ -249,6 +249,7 @@ class SfxManager:
             'party_hurt': self._load('party_hurt', 'sfx_party_hurt'),
             'enemy_hurt': self._load('enemy_hurt', 'sfx_enemy_hurt'),
             'heal': self._load('heal', 'sfx_heal'),
+            'typer': self._load('typer', 'sfx_typer'),
         }
 
     def play(self, key: str, volume: float = 1.0):
@@ -595,7 +596,9 @@ class Renderer:
             y += 14
 
     # ---- Top‑down centered & larger ----
-    def draw_topdown(self, grid, pos: Tuple[int, int], facing: int, level_ix: int):
+    def draw_topdown(self, grid, pos: Tuple[int, int], facing: int, level_ix: int,
+                     world_shift_tiles: Tuple[float, float] = (0.0, 0.0), player_bob_px: int = 0,
+                     player_frac: Tuple[float, float] = (0.0, 0.0)):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 22))
         px, py = pos
@@ -608,10 +611,12 @@ class Renderer:
         total_h = visible * cell
         ox = (WIDTH - total_w) // 2
         oy = (VIEW_H - total_h) // 2
+        # Precompute pixel shift from tile shift
+        shift_px = (world_shift_tiles[0] * cell, world_shift_tiles[1] * cell)
         for y in range(py - radius, py + radius + 1):
             for x in range(px - radius, px + radius + 1):
-                sx = ox + (x - (px - radius)) * cell
-                sy = oy + (y - (py - radius)) * cell
+                sx = ox + (x - (px - radius)) * cell + int(shift_px[0])
+                sy = oy + (y - (py - radius)) * cell + int(shift_px[1])
                 if 0 <= x < len(grid[0]) and 0 <= y < len(grid):
                     t = grid[y][x]
                     if t == T_WALL:
@@ -626,12 +631,16 @@ class Renderer:
                             pygame.draw.polygon(view, GREEN, [(sx + cell // 5, sy + cell - cell // 5), (sx + cell - cell // 5, sy + cell - cell // 5), (sx + cell // 2, sy + cell // 5)])
         # player marker
         pxs = ox + radius * cell + cell // 2
-        pys = oy + radius * cell + cell // 2
+        pys = oy + radius * cell + cell // 2 + int(player_bob_px)
         pygame.draw.circle(view, PURPLE, (pxs, pys), max(4, cell // 4))
         d = DIRS[facing]
         pygame.draw.line(view, PURPLE, (pxs, pys), (pxs + d[0] * max(10, cell // 2), pys + d[1] * max(10, cell // 2)), 2)
         # Apply a torch-like FOV: LOS-based, cone-shaped, with subtle flicker
-        self._overlay_torch_fov(view, grid, px, py, facing, cell, ox, oy, radius)
+        pxf = px + float(player_frac[0])
+        pyf = py + float(player_frac[1])
+        self._overlay_torch_fov(view, grid, px, py, facing, cell, ox, oy, radius,
+                                 world_px_off=int(shift_px[0]), world_py_off=int(shift_px[1]),
+                                 player_center_frac=(pxf, pyf))
         self.text_small(view, f"L{level_ix} pos {pos} {DIR_NAMES[facing]}", (12, 6))
 
     def _overlay_vision_cone(self, surf: pygame.Surface, center: Tuple[int, int], facing: int,
@@ -738,6 +747,8 @@ class Renderer:
     def _overlay_torch_fov(self, surf: pygame.Surface, grid: List[List[int]],
                             px: int, py: int, facing: int,
                             cell: int, ox: int, oy: int, radius: int,
+                            world_px_off: int = 0, world_py_off: int = 0,
+                            player_center_frac: Tuple[float, float] = None,
                             spread_deg: float = 80.0, edge_alpha: int = 240, gamma: float = 1.2):
         """Wall-occluding cone FOV with distance-based darkening and subtle flicker.
         - Outside the cone is fully black.
@@ -754,6 +765,10 @@ class Renderer:
             half = math.radians(spread_deg) / 2.0
             max_dist = max(1.0, float(radius))
             now = pygame.time.get_ticks() / 1000.0
+            # fractional player center (for smooth FOV following during movement)
+            pxf, pyf = (float(px), float(py))
+            if player_center_frac is not None:
+                pxf, pyf = player_center_frac
 
             # Iterate tiles within the drawn radius
             for ty in range(py - radius, py + radius + 1):
@@ -762,17 +777,24 @@ class Renderer:
                 for tx in range(px - radius, px + radius + 1):
                     if not (0 <= tx < len(grid[0])):
                         continue
-                    dx = tx - px
-                    dy = ty - py
+                    dx = tx - pxf
+                    dy = ty - pyf
                     # Skip far corners outside circular-ish bound for a nicer edge
                     if dx * dx + dy * dy > (radius + 0.5) * (radius + 0.5):
                         continue
                     ang = math.atan2(dy, dx)
-                    near3 = (abs(dx) <= 1 and abs(dy) <= 1)
+                    near3 = (max(abs(dx), abs(dy)) <= 1.0)
                     if not near3:
                         if self._angle_diff(ang, ang_face) > half:
                             continue  # outside facing cone
-                        if not self._los_clear(grid, px, py, tx, ty):
+                        # Use integer tile for LOS from the closest of start/end tiles
+                        los_px, los_py = px, py
+                        # Prefer the nearer whole tile to the fractional center
+                        npx = round(pxf)
+                        npy = round(pyf)
+                        if 0 <= npx < len(grid[0]) and 0 <= npy < len(grid):
+                            los_px, los_py = int(npx), int(npy)
+                        if not self._los_clear(grid, los_px, los_py, tx, ty):
                             continue  # blocked by walls
 
                     # Distance-based darkness (0 near -> edge_alpha far)
@@ -796,13 +818,13 @@ class Renderer:
                     a = int(max(0, min(255, a + flicker)))
 
                     # Brighten player's own tile fully
-                    if tx == px and ty == py:
+                    if int(round(pxf)) == tx and int(round(pyf)) == ty:
                         a = 0
 
                     # Draw to mask at the tile's screen rect, leave a 1px gutter
                     sx = ox + (tx - (px - radius)) * cell
                     sy = oy + (ty - (py - radius)) * cell
-                    rect = pygame.Rect(int(sx), int(sy), max(1, cell - 1), max(1, cell - 1))
+                    rect = pygame.Rect(int(sx + world_px_off), int(sy + world_py_off), max(1, cell - 1), max(1, cell - 1))
                     pygame.draw.rect(mask, (0, 0, 0, a), rect)
 
             # Apply min blending so mask alpha reduces darkness in lit areas
@@ -948,8 +970,12 @@ class MessageLog:
         self._current: str = ""
         self._reveal_chars: int = 0
         self._last_tick: int = pygame.time.get_ticks()
-        # chars per second; tune for comfortable reading
-        self._cps: float = 90.0
+        # chars per second; tune for comfortable reading (slower)
+        self._cps: float = 70.0
+        # optional sound manager for typewriter sfx
+        self._sfx: Optional[SfxManager] = None
+        self._typer_last_ms: int = 0
+        self._typer_interval_ms: int = 45
 
     def add(self, txt: str):
         # queue text to be revealed with typewriter effect
@@ -969,7 +995,16 @@ class MessageLog:
         if self._current:
             add_chars = int(self._cps * (dt / 1000.0))
             if add_chars > 0:
+                before = self._reveal_chars
                 self._reveal_chars = min(len(self._current), self._reveal_chars + add_chars)
+                # play soft typewriter sfx while revealing
+                if self._sfx and self._reveal_chars > before:
+                    if now - self._typer_last_ms >= self._typer_interval_ms:
+                        try:
+                            self._sfx.play('typer', 0.35)
+                        except Exception:
+                            pass
+                        self._typer_last_ms = now
                 if self._reveal_chars >= len(self._current):
                     # push finished line into history, reset current
                     self.lines.append(self._current)
@@ -977,6 +1012,9 @@ class MessageLog:
                     self._reveal_chars = 0
                     # small delay before next line begins revealing
                     # by leaving update until next frame to pull from queue
+
+    def set_sfx(self, sfx: "SfxManager"):
+        self._sfx = sfx
 
     def render_lines(self) -> List[str]:
         # return lines including partially revealed current line (if any)
@@ -1036,7 +1074,7 @@ class Battle:
         count = random.randint(max(1, nmin), max(nmin, nmax))
         chosen = [random.choice(ids) for _ in range(count)] if ids else []
         self.enemies = [Enemy.from_base(self.monsters_by_id[cid]) for cid in chosen]
-        self.log.add(f"Ambushed by {', '.join(e.name for e in self.enemies)}!")
+        # No ambush message; battle UI/intro handles the transition
         self.build_turn_order()
         self.turn_pos = 0
 
@@ -1377,7 +1415,7 @@ class Battle:
             m.exp += total_exp // max(1, len(alive))
         # Gold now goes to the party pool
         self.party.gold += total_gold
-        self.log.add(f"Victory! +~{total_exp} EXP, +~{total_gold}g (party)")
+        # Do not log battle results here; show them only on the Victory screen
         # Record for victory screen
         self.victory_exp = total_exp
         self.victory_gold = total_gold
@@ -1484,6 +1522,19 @@ class Game:
         self.music = MusicManager()
         # Sound effects
         self.sfx = SfxManager()
+        # Hook sfx into message log for typewriter clicks
+        try:
+            self.log.set_sfx(self.sfx)
+        except Exception:
+            pass
+
+        # Smooth maze movement animation
+        self.move_active: bool = False
+        self.move_from: Tuple[int, int] = (0, 0)
+        self.move_to: Tuple[int, int] = (0, 0)
+        self.move_t0: int = 0
+        self.move_dur: int = 320  # ms
+        self.move_step_sfx_count: int = 0  # 0,1 -> two footfalls per step
 
         # Data
         self.items_list: List[Dict[str, Any]] = []
@@ -1555,9 +1606,10 @@ class Game:
         # Victory typewriter
         self.victory_type_t0: int = 0
         self.victory_type_chars: int = 0
-        self.victory_type_cps: float = 70.0  # chars per second
+        self.victory_type_cps: float = 24.0  # chars per second (much slower)
         self.victory_text_lines: List[str] = []
         self.victory_done: bool = False
+        self.victory_type_last_sfx: int = 0
         # Defeat screen fade
         self.defeat_t0: int = 0
 
@@ -2566,16 +2618,13 @@ class Game:
         dx, dy = DIRS[self.facing]
         nx, ny = self.pos[0] + dx, self.pos[1] + dy
         if self.is_open(nx, ny):
-            self.pos = (nx, ny)
-            # Step sound
-            try:
-                self.sfx.play('step', 0.8)
-            except Exception:
-                pass
-            special = self.grid()[ny][nx] in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
-            self.check_special_tile()
-            if not special and random.random() < self.encounter_rate:
-                self.start_battle()
+            # Begin smooth movement animation
+            if not self.move_active:
+                self.move_active = True
+                self.move_from = self.pos
+                self.move_to = (nx, ny)
+                self.move_t0 = pygame.time.get_ticks()
+                self.move_step_sfx_count = 0
         else:
             self.log.add("You bump into a wall.")
 
@@ -2634,7 +2683,24 @@ class Game:
         self.combat_intro_done_triggered = False
 
     def draw_maze(self):
-        self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix)
+        # Smooth movement offsets during walking animation
+        shift_tiles = (0.0, 0.0)
+        bob_px = 0
+        move_p = 0.0
+        if self.move_active:
+            dx, dy = DIRS[self.facing]
+            now = pygame.time.get_ticks()
+            move_p = max(0.0, min(1.0, (now - self.move_t0) / max(1, self.move_dur)))
+            shift_tiles = (-dx * move_p, -dy * move_p)
+            # Two bops over the duration
+            amp = 4
+            bob_px = int(-abs(math.sin(move_p * math.pi * 2)) * amp)
+        # fractional player offset in tiles for FOV center
+        frac = (0.0, 0.0)
+        if self.move_active:
+            dx, dy = DIRS[self.facing]
+            frac = (dx * move_p, dy * move_p)
+        self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix, shift_tiles, bob_px, frac)
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         self.r.text_small(view, "Esc: Menu  ↑: Move  ←/→: Turn", (12, VIEW_H - 22), LIGHT)
         # During combat intro flashes, overlay on maze
@@ -2649,6 +2715,9 @@ class Game:
 
     def maze_input(self, event):
         if event.type == pygame.KEYDOWN:
+            if self.move_active:
+                # ignore movement/turn keys during step animation
+                return
             if event.key == pygame.K_LEFT:
                 self.turn_left()
             elif event.key == pygame.K_RIGHT:
@@ -3469,7 +3538,15 @@ class Game:
         if not self.victory_done:
             elapsed = max(0, now - self.victory_type_t0)
             target = int(self.victory_type_cps * (elapsed / 1000.0))
+            prev_chars = self.victory_type_chars
             self.victory_type_chars = max(self.victory_type_chars, target)
+            # typer sfx during reveal (throttled)
+            if self.victory_type_chars > prev_chars and now - self.victory_type_last_sfx >= 50:
+                try:
+                    self.sfx.play('typer', 0.35)
+                except Exception:
+                    pass
+                self.victory_type_last_sfx = now
 
         total = sum(len(s) for s in self.victory_text_lines)
         shown = min(total, self.victory_type_chars)
@@ -3542,6 +3619,31 @@ class Game:
     def update(self):
         # progress typewriter for message log every frame
         self.log.update()
+        # Smooth maze movement animation progression
+        if self.mode in (MODE_MAZE, MODE_COMBAT_INTRO, MODE_SCENE) and self.move_active:
+            now = pygame.time.get_ticks()
+            p = max(0.0, min(1.0, (now - self.move_t0) / max(1, self.move_dur)))
+            # Trigger two footstep sounds around 25% and 75%
+            try:
+                if self.move_step_sfx_count == 0 and p >= 0.25:
+                    self.sfx.play('step', 0.8)
+                    self.move_step_sfx_count = 1
+                elif self.move_step_sfx_count == 1 and p >= 0.75:
+                    self.sfx.play('step', 0.8)
+                    self.move_step_sfx_count = 2
+            except Exception:
+                pass
+            if p >= 1.0:
+                # finalize movement
+                self.pos = self.move_to
+                self.move_active = False
+                # After arriving, handle special tiles and encounters
+                x, y = self.pos
+                t = self.grid()[y][x]
+                special = t in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
+                self.check_special_tile()
+                if self.mode == MODE_MAZE and not special and random.random() < self.encounter_rate:
+                    self.start_battle()
         # Handle combat intro sequence across modes
         if self.combat_intro_active:
             now = pygame.time.get_ticks()
