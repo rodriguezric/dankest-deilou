@@ -258,8 +258,12 @@ class SfxManager:
         if snd is None:
             return
         try:
+            # Make UI sounds softer globally
+            if key.startswith('sfx_ui_'):
+                volume *= 0.35
+            vol = max(0.0, min(1.0, volume))
             old = snd.get_volume()
-            snd.set_volume(max(0.0, min(1.0, volume)))
+            snd.set_volume(vol)
             snd.play()
             snd.set_volume(old)
         except Exception:
