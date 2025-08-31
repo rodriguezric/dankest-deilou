@@ -434,7 +434,8 @@ class Renderer:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 22))
         px, py = pos
-        radius = 10
+        # Zoom in closer: smaller radius shows fewer tiles, larger cells
+        radius = 4
         visible = radius * 2 + 1
         margin = 40
         cell = min((WIDTH - margin * 2) // visible, (VIEW_H - margin * 2) // visible)
@@ -464,7 +465,188 @@ class Renderer:
         pygame.draw.circle(view, PURPLE, (pxs, pys), max(4, cell // 4))
         d = DIRS[facing]
         pygame.draw.line(view, PURPLE, (pxs, pys), (pxs + d[0] * max(10, cell // 2), pys + d[1] * max(10, cell // 2)), 2)
+        # Apply a torch-like FOV: LOS-based, cone-shaped, with subtle flicker
+        self._overlay_torch_fov(view, grid, px, py, facing, cell, ox, oy, radius)
         self.text_small(view, f"L{level_ix} pos {pos} {DIR_NAMES[facing]}", (12, 6))
+
+    def _overlay_vision_cone(self, surf: pygame.Surface, center: Tuple[int, int], facing: int,
+                              spread_deg: float = 80.0, steps: int = 16, edge_alpha: int = 220):
+        """Darken outside the player's field of view completely, and inside the cone
+        keep it bright near the player (no darkening) and fade darker with distance.
+        """
+        try:
+            # Full black overlay everywhere to start
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 255))
+
+            # We build a mask whose alpha is the desired local darkness (lower alpha = brighter)
+            # Start with fully opaque (black) everywhere, then progressively take the minimum
+            # alpha inside the cone using BLEND_RGBA_MIN across steps to form a gradient.
+            mask = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            mask.fill((0, 0, 0, 255))
+
+            # Facing to angle (radians). 0:N,1:E,2:S,3:W
+            angle_map = {0: -math.pi / 2, 1: 0.0, 2: math.pi / 2, 3: math.pi}
+            ang = angle_map.get(facing, 0.0)
+            spread = math.radians(spread_deg)
+            length = max(WIDTH, VIEW_H) * 1.35  # extend beyond view
+
+            steps = max(4, int(steps))
+            # Reusable temp surface for min-blending each step
+            step_surf = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            # Use a slight easing so brightness persists a bit near player
+            for i in range(1, steps + 1):
+                frac = i / steps  # 0..1 outward
+                # Darkness grows with distance (0 near, edge_alpha near far)
+                a = int(edge_alpha * (frac ** 1.2))
+                L = length * frac
+                a0 = ang - spread / 2
+                a1 = ang + spread / 2
+                p1 = (center[0] + math.cos(a0) * L, center[1] + math.sin(a0) * L)
+                p2 = (center[0] + math.cos(a1) * L, center[1] + math.sin(a1) * L)
+                # Draw this step's cone to a temp surface, then MIN-blit into mask
+                step_surf.fill((0, 0, 0, 255))
+                pygame.draw.polygon(step_surf, (0, 0, 0, a), [center, p1, p2])
+                mask.blit(step_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+
+            # Ensure absolute brightness at the player's immediate position
+            pygame.draw.circle(mask, (0, 0, 0, 0), (int(center[0]), int(center[1])), 4)
+
+            # Apply minimum: overlay alpha becomes the mask alpha, leaving outside-of-cone fully black
+            overlay.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            surf.blit(overlay, (0, 0))
+        except Exception:
+            # Fallback: hard cone with transparency ramp using concentric blits
+            angle_map = {0: -math.pi / 2, 1: 0.0, 2: math.pi / 2, 3: math.pi}
+            ang = angle_map.get(facing, 0.0)
+            spread = math.radians(spread_deg)
+            length = max(WIDTH, VIEW_H) * 1.3
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 255))
+            for i in range(1, max(4, int(steps)) + 1):
+                frac = i / max(4, int(steps))
+                a = int(edge_alpha * (frac ** 1.2))
+                a0 = ang - spread / 2
+                a1 = ang + spread / 2
+                L = length * frac
+                p1 = (center[0] + math.cos(a0) * L, center[1] + math.sin(a0) * L)
+                p2 = (center[0] + math.cos(a1) * L, center[1] + math.sin(a1) * L)
+                temp = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                pygame.draw.polygon(temp, (0, 0, 0, a), [center, p1, p2])
+                overlay.blit(temp, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            pygame.draw.circle(overlay, (0, 0, 0, 0), (int(center[0]), int(center[1])), 4)
+            surf.blit(overlay, (0, 0))
+
+    def _angle_for_facing(self, facing: int) -> float:
+        return {0: -math.pi / 2, 1: 0.0, 2: math.pi / 2, 3: math.pi}.get(facing, 0.0)
+
+    def _angle_diff(self, a: float, b: float) -> float:
+        d = (a - b + math.pi) % (2 * math.pi) - math.pi
+        return abs(d)
+
+    def _los_clear(self, grid: List[List[int]], x0: int, y0: int, x1: int, y1: int) -> bool:
+        """Return True if line from (x0,y0) to (x1,y1) is not blocked by walls.
+        Allows seeing the first wall cell itself, but not beyond it."""
+        x, y = x0, y0
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+        w = len(grid[0]); h = len(grid)
+        while True:
+            if not (0 <= x < w and 0 <= y < h):
+                return False
+            if (x, y) == (x1, y1):
+                return True
+            # If we hit a wall before reaching target, blocked
+            if (x, y) != (x0, y0) and (x, y) != (x1, y1) and grid[y][x] == T_WALL:
+                return False
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+    def _overlay_torch_fov(self, surf: pygame.Surface, grid: List[List[int]],
+                            px: int, py: int, facing: int,
+                            cell: int, ox: int, oy: int, radius: int,
+                            spread_deg: float = 80.0, edge_alpha: int = 240, gamma: float = 1.2):
+        """Wall-occluding cone FOV with distance-based darkening and subtle flicker.
+        - Outside the cone is fully black.
+        - Near the player is bright (alpha ~0), darkens with distance.
+        - Light flickers slightly over time like a torch."""
+        try:
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 255))  # fully black everywhere
+
+            mask = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            mask.fill((0, 0, 0, 255))  # start fully dark; lower alpha in lit tiles
+
+            ang_face = self._angle_for_facing(facing)
+            half = math.radians(spread_deg) / 2.0
+            max_dist = max(1.0, float(radius))
+            now = pygame.time.get_ticks() / 1000.0
+
+            # Iterate tiles within the drawn radius
+            for ty in range(py - radius, py + radius + 1):
+                if not (0 <= ty < len(grid)):
+                    continue
+                for tx in range(px - radius, px + radius + 1):
+                    if not (0 <= tx < len(grid[0])):
+                        continue
+                    dx = tx - px
+                    dy = ty - py
+                    # Skip far corners outside circular-ish bound for a nicer edge
+                    if dx * dx + dy * dy > (radius + 0.5) * (radius + 0.5):
+                        continue
+                    ang = math.atan2(dy, dx)
+                    near3 = (abs(dx) <= 1 and abs(dy) <= 1)
+                    if not near3:
+                        if self._angle_diff(ang, ang_face) > half:
+                            continue  # outside facing cone
+                        if not self._los_clear(grid, px, py, tx, ty):
+                            continue  # blocked by walls
+
+                    # Distance-based darkness (0 near -> edge_alpha far)
+                    dist = max(0.0, math.hypot(dx, dy))
+                    if near3:
+                        # Always-visible comfort bubble around player (3x3). Keep very bright.
+                        # Use a very small base darkness by distance to hint depth.
+                        base = min(1.0, (dist / 1.5) ** 1.0)
+                        a = int(min(50, 35 * base))  # 0..~35
+                    else:
+                        base = (dist / max_dist) ** gamma
+                        a = int(edge_alpha * min(1.0, max(0.0, base)))
+
+                    # Subtle torch flicker: vary phase per tile, mild amplitude
+                    phase = ((tx * 37 + ty * 71) % 256) / 256.0 * 2 * math.pi
+                    if near3:
+                        amp = 4 + 2 * (dist / 1.5)  # very subtle close to player
+                    else:
+                        amp = 12 + 6 * (dist / max_dist)  # slightly stronger farther
+                    flicker = math.sin(now * 6.0 + phase) * amp
+                    a = int(max(0, min(255, a + flicker)))
+
+                    # Brighten player's own tile fully
+                    if tx == px and ty == py:
+                        a = 0
+
+                    # Draw to mask at the tile's screen rect, leave a 1px gutter
+                    sx = ox + (tx - (px - radius)) * cell
+                    sy = oy + (ty - (py - radius)) * cell
+                    rect = pygame.Rect(int(sx), int(sy), max(1, cell - 1), max(1, cell - 1))
+                    pygame.draw.rect(mask, (0, 0, 0, a), rect)
+
+            # Apply min blending so mask alpha reduces darkness in lit areas
+            overlay.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            surf.blit(overlay, (0, 0))
+        except Exception:
+            # If anything goes wrong, fall back to simple non-LOS cone
+            self._overlay_vision_cone(surf, (ox + radius * cell + cell // 2, oy + radius * cell + cell // 2), facing,
+                                      spread_deg=spread_deg, steps=12, edge_alpha=edge_alpha)
 
     # ---- Generic centered menu (no header) ----
     def draw_center_menu(self, options: List[str], selected: int):
