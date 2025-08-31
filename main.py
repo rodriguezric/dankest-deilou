@@ -212,6 +212,60 @@ class MusicManager:
         self.current_channel = None
 
 
+class SfxManager:
+    def __init__(self):
+        # If mixer failed to init in MusicManager, we still try; ignore errors.
+        self.enabled = pygame.mixer.get_init() is not None
+        self.sounds: Dict[str, Optional[pygame.mixer.Sound]] = {}
+        self._load_defaults()
+
+    def _find_file(self, base: str) -> Optional[str]:
+        # Try common extensions and locations
+        exts = [".wav", ".ogg", ".mp3"]
+        for ext in exts:
+            for root in ("data", "."):
+                path = os.path.join(root, base + ext)
+                if os.path.exists(path):
+                    return path
+        return None
+
+    def _load(self, key: str, base: str) -> Optional[pygame.mixer.Sound]:
+        if not self.enabled:
+            return None
+        fn = self._find_file(base)
+        if not fn:
+            return None
+        try:
+            return pygame.mixer.Sound(fn)
+        except Exception:
+            return None
+
+    def _load_defaults(self):
+        self.sounds = {
+            'ui_move': self._load('ui_move', 'sfx_ui_move'),
+            'ui_select': self._load('ui_select', 'sfx_ui_select'),
+            'step': self._load('step', 'sfx_step'),
+            'miss': self._load('miss', 'sfx_miss'),
+            'party_hurt': self._load('party_hurt', 'sfx_party_hurt'),
+            'enemy_hurt': self._load('enemy_hurt', 'sfx_enemy_hurt'),
+            'heal': self._load('heal', 'sfx_heal'),
+        }
+
+    def play(self, key: str, volume: float = 1.0):
+        if not self.enabled:
+            return
+        snd = self.sounds.get(key)
+        if snd is None:
+            return
+        try:
+            old = snd.get_volume()
+            snd.set_volume(max(0.0, min(1.0, volume)))
+            snd.play()
+            snd.set_volume(old)
+        except Exception:
+            pass
+
+
 def roll_stat():
     return sum(random.randint(1, 6) for _ in range(3))
 
@@ -933,13 +987,14 @@ class MessageLog:
 
 # ------------------------------ Battle -------------------------------------
 class Battle:
-    def __init__(self, party: Party, log: MessageLog, effects: HitEffects, items_by_id: Dict[str, Any], monsters_by_id: Dict[str, Any], skills_config: Dict[str, List[Dict[str, Any]]]):
+    def __init__(self, party: Party, log: MessageLog, effects: HitEffects, items_by_id: Dict[str, Any], monsters_by_id: Dict[str, Any], skills_config: Dict[str, List[Dict[str, Any]]], sfx: Optional["SfxManager"] = None):
         self.party = party
         self.log = log
         self.effects = effects
         self.items_by_id = items_by_id
         self.monsters_by_id = monsters_by_id
         self.skills_config = skills_config
+        self.sfx = sfx
         self.enemies: List[Enemy] = []
         self.turn_index = 0  # kept for compatibility in some calls
         self.turn_order: List[Tuple[str, int]] = []  # list of (side, index) where index is party global index or enemy index
@@ -1239,6 +1294,11 @@ class Battle:
                     if 0 <= i < len(self.enemies):
                         self.enemies[i].hp -= dmg
                         self.effects.trigger('enemy', i, 300, 7)
+                        try:
+                            # enemy hurt sfx
+                            self.sfx.play('enemy_hurt', 0.7)
+                        except Exception:
+                            pass
                         # damage floater (enemy)
                         self.add_floater('enemy', i, str(dmg), 800, WHITE)
                         if self.enemies[i].hp <= 0:
@@ -1250,6 +1310,11 @@ class Battle:
                     if 0 <= gi < len(self.party.members):
                         t = self.party.members[gi]
                         t.hp -= dmg
+                        try:
+                            # party hurt sfx
+                            self.sfx.play('party_hurt', 0.7)
+                        except Exception:
+                            pass
                         # damage floater (party)
                         self.add_floater('party', gi, str(dmg), 800, WHITE)
                         if t.hp <= 0:
@@ -1263,6 +1328,10 @@ class Battle:
                 idx = act['target_index']
                 side = act['target_side']
                 self.add_floater(side, idx, 'MISS', 700, WHITE)
+                try:
+                    self.sfx.play('miss', 0.6)
+                except Exception:
+                    pass
                 self.log.add(act.get('miss_label', 'The attack misses.'))
         elif act['type'] == 'heal':
             gi = act['target_index']
@@ -1273,6 +1342,10 @@ class Battle:
                 t.hp = min(t.max_hp, t.hp + amt)
                 # heal floater (party)
                 self.add_floater('party', gi, str(amt), 800, YELLOW)
+                try:
+                    self.sfx.play('heal', 0.6)
+                except Exception:
+                    pass
                 self.log.add(f"{act.get('actor_name','Priest')} heals {t.name} for {t.hp - before}.")
         elif act['type'] == 'run':
             if act.get('success'):
@@ -1409,6 +1482,8 @@ class Game:
 
         # Music
         self.music = MusicManager()
+        # Sound effects
+        self.sfx = SfxManager()
 
         # Data
         self.items_list: List[Dict[str, Any]] = []
@@ -1705,9 +1780,12 @@ class Game:
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.title_index = (self.title_index - 1) % 3
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.title_index = (self.title_index + 1) % 3
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.sfx.play('ui_select', 0.6)
                 if self.title_index == 0:  # New Game
                     # reset party and resources
                     self.party = Party()
@@ -1755,11 +1833,15 @@ class Game:
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.menu_index = (self.menu_index - 1) % 11
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.menu_index = (self.menu_index + 1) % 11
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.sfx.play('ui_select', 0.6)
                 self.select_town_option(self.menu_index)
             elif pygame.K_1 <= event.key <= pygame.K_9:
+                self.sfx.play('ui_select', 0.6)
                 self.select_town_option(event.key - pygame.K_1)
 
     def select_town_option(self, ix):
@@ -1869,9 +1951,12 @@ class Game:
                 opts_len = 3
                 if event.key in (pygame.K_UP, pygame.K_k):
                     self.party_actions_index = (self.party_actions_index - 1) % opts_len
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     self.party_actions_index = (self.party_actions_index + 1) % opts_len
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self.sfx.play('ui_select', 0.6)
                     choice = self.party_actions_index
                     if choice == 0:  # Create
                         if len(self.party.members) >= ROSTER_MAX:
@@ -1893,9 +1978,12 @@ class Game:
                 n = max(1, len(self.party.members) + 1)  # +1 for Back
                 if event.key in (pygame.K_UP, pygame.K_k):
                     self.party_dismiss_index = (self.party_dismiss_index - 1) % n
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     self.party_dismiss_index = (self.party_dismiss_index + 1) % n
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self.sfx.play('ui_select', 0.6)
                     if self.party_dismiss_index == len(self.party.members):
                         self.party_mode = 'menu'
                         self.party_actions_index = 1  # keep focus on Dismiss
@@ -1907,7 +1995,9 @@ class Game:
             elif self.party_mode == 'dismiss_confirm':
                 if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
                     self.party_confirm_index = 1 - self.party_confirm_index  # toggle between 0 and 1
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self.sfx.play('ui_select', 0.6)
                     if self.party_confirm_index == 0:  # Yes
                         if self.party.members:
                             ix = self.party_dismiss_index % len(self.party.members)
@@ -1940,9 +2030,12 @@ class Game:
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.menu_index = (self.menu_index - 1) % max(1, len(self.party.members))
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.menu_index = (self.menu_index + 1) % max(1, len(self.party.members))
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.sfx.play('ui_select', 0.6)
                 i = self.menu_index
                 if i < len(self.party.members):
                     if i in self.party.active:
@@ -2474,6 +2567,11 @@ class Game:
         nx, ny = self.pos[0] + dx, self.pos[1] + dy
         if self.is_open(nx, ny):
             self.pos = (nx, ny)
+            # Step sound
+            try:
+                self.sfx.play('step', 0.8)
+            except Exception:
+                pass
             special = self.grid()[ny][nx] in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
             self.check_special_tile()
             if not special and random.random() < self.encounter_rate:
@@ -2522,7 +2620,7 @@ class Game:
         self.log.add(f"Ascend to level {self.level_ix}.")
 
     def start_battle(self):
-        self.in_battle = Battle(self.party, self.log, self.effects, self.items_by_id, self.monsters_by_id, self.skills_config)
+        self.in_battle = Battle(self.party, self.log, self.effects, self.items_by_id, self.monsters_by_id, self.skills_config, self.sfx)
         # Use level-specific encounter config if available
         lvl = self.dun.levels[self.level_ix]
         allowed = lvl.encounter_monsters or list(self.monsters_by_id.keys())
@@ -2857,9 +2955,12 @@ class Game:
             n = max(1, len(self.party.members))
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.equip_member_ix = (self.equip_member_ix - 1) % n
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.equip_member_ix = (self.equip_member_ix + 1) % n
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.sfx.play('ui_select', 0.6)
                 if self.party.members:
                     self.equip_phase = 'slot'
                     self.equip_slot_ix = 0
@@ -2868,9 +2969,12 @@ class Game:
         elif self.equip_phase == 'slot':
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.equip_slot_ix = (self.equip_slot_ix - 1) % 5
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.equip_slot_ix = (self.equip_slot_ix + 1) % 5
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.sfx.play('ui_select', 0.6)
                 # If Back selected
                 if self.equip_slot_ix == 4:
                     self.equip_phase = 'member'
@@ -2898,9 +3002,12 @@ class Game:
             list_len = len(pool) + 1 + (1 if can_unequip else 0)
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.equip_choose_ix = (self.equip_choose_ix - 1) % max(1, list_len)
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.equip_choose_ix = (self.equip_choose_ix + 1) % max(1, list_len)
+                self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.sfx.play('ui_select', 0.6)
                 # Back
                 if self.equip_choose_ix == list_len - 1:
                     self.equip_phase = 'slot'
@@ -2934,9 +3041,12 @@ class Game:
             if b.state == 'menu':
                 if event.key in (pygame.K_UP, pygame.K_k):
                     b.ui_menu_index = (b.ui_menu_index - 1) % len(b.ui_menu_options)
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     b.ui_menu_index = (b.ui_menu_index + 1) % len(b.ui_menu_options)
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self.sfx.play('ui_select', 0.6)
                     chosen_id = b.ui_menu_options[b.ui_menu_index][0]
                     actor = b.current_actor()
                     if chosen_id == 'attack':
@@ -2967,9 +3077,12 @@ class Game:
                 n = max(1, len(b.skill_options) + 1)
                 if event.key in (pygame.K_UP, pygame.K_k):
                     b.skill_menu_index = (b.skill_menu_index - 1) % n
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     b.skill_menu_index = (b.skill_menu_index + 1) % n
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self.sfx.play('ui_select', 0.6)
                     if b.skill_menu_index == len(b.skill_options):
                         # Back
                         b.state = 'menu'
@@ -2998,9 +3111,12 @@ class Game:
                         b.begin_player_turn(); return
                     if event.key in (pygame.K_LEFT, pygame.K_h):
                         b.target_menu_index = (b.target_menu_index - 1) % len(alive)
+                        self.sfx.play('ui_move', 0.5)
                     elif event.key in (pygame.K_RIGHT, pygame.K_l):
                         b.target_menu_index = (b.target_menu_index + 1) % len(alive)
+                        self.sfx.play('ui_move', 0.5)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        self.sfx.play('ui_select', 0.6)
                         actor = b.current_actor()
                         target_i = alive[b.target_menu_index]
                         if b.target_mode.get('action') == 'attack':
@@ -3021,9 +3137,12 @@ class Game:
                         b.begin_player_turn(); return
                     if event.key in (pygame.K_LEFT, pygame.K_h):
                         b.target_menu_index = (b.target_menu_index - 1) % len(alive_gi)
+                        self.sfx.play('ui_move', 0.5)
                     elif event.key in (pygame.K_RIGHT, pygame.K_l):
                         b.target_menu_index = (b.target_menu_index + 1) % len(alive_gi)
+                        self.sfx.play('ui_move', 0.5)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        self.sfx.play('ui_select', 0.6)
                         actor = b.current_actor()
                         target_gi = alive_gi[b.target_menu_index]
                         if b.target_mode.get('action') == 'heal':
@@ -3049,9 +3168,12 @@ class Game:
                 n = max(1, len(items) + 1)  # +1 Back
                 if event.key in (pygame.K_UP, pygame.K_k):
                     b.item_menu_index = (b.item_menu_index - 1) % n
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     b.item_menu_index = (b.item_menu_index + 1) % n
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self.sfx.play('ui_select', 0.6)
                     if b.item_menu_index == len(items):
                         b.state = 'menu'
                     else:
@@ -3063,9 +3185,12 @@ class Game:
             elif b.state == 'itemaction':
                 if event.key in (pygame.K_UP, pygame.K_k):
                     b.item_action_index = (b.item_action_index - 1) % 2
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     b.item_action_index = (b.item_action_index + 1) % 2
+                    self.sfx.play('ui_move', 0.5)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self.sfx.play('ui_select', 0.6)
                     if b.item_action_index == 0 and b.selected_item_iid:
                         # choose party target for the item
                         b.state = 'target'
