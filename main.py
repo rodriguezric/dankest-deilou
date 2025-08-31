@@ -1477,6 +1477,12 @@ class Game:
         self.encounter_rate = 0.22
         # Victory screen info
         self.victory_info: Dict[str, Any] = {}
+        # Victory typewriter
+        self.victory_type_t0: int = 0
+        self.victory_type_chars: int = 0
+        self.victory_type_cps: float = 70.0  # chars per second
+        self.victory_text_lines: List[str] = []
+        self.victory_done: bool = False
         # Defeat screen fade
         self.defeat_t0: int = 0
 
@@ -1530,7 +1536,8 @@ class Game:
             # Start visual transition
             # Longer timings to make the fade more noticeable
             fade_out, hold, fade_in = 1000, 300, 1100
-            self.start_scene_transition(new_mode, fade_out, hold, fade_in)
+            # Use old_mode as the from-scene to avoid flashing the target early
+            self.start_scene_transition(old_mode, new_mode, fade_out, hold, fade_in)
             # Start a slightly longer music crossfade to match the scene change
             total = fade_out + hold + fade_in
             if self.music.enabled:
@@ -1553,17 +1560,17 @@ class Game:
                 # Start battle immediately (no crossfade)
                 self.music.play_immediate('battle')
             elif new_mode == MODE_VICTORY:
-                # Fade the battle music to silence
-                self.music.fade_out_all(fade_ms=1500)
+                # Fade the battle music to silence over 3 seconds
+                self.music.fade_out_all(fade_ms=3000)
             elif new_mode == MODE_TITLE:
                 # Keep title silent; gently fade out anything playing
                 self.music.fade_out_all(fade_ms=700)
         except Exception:
             pass
 
-    def start_scene_transition(self, to_mode: str, fade_out_ms: int, hold_ms: int, fade_in_ms: int):
+    def start_scene_transition(self, from_mode: str, to_mode: str, fade_out_ms: int, hold_ms: int, fade_in_ms: int):
         self.scene_active = True
-        self.scene_from = self.mode  # current visual
+        self.scene_from = from_mode  # explicit source visual
         self.scene_to = to_mode
         self.scene_stage = 0
         self.scene_t0 = pygame.time.get_ticks()
@@ -3313,11 +3320,14 @@ class Game:
         view.fill((10, 14, 10))
         # Panel
         pad_x, pad_y = 14, 12
-        lines = [
-            "Victory!",
-            f"EXP gained: {self.victory_info.get('exp', 0)}",
-            f"Gold found: {self.victory_info.get('gold', 0)}g",
-        ]
+        title = "Victory!"
+        # Prepare lines from current state (fallback if not set)
+        if not self.victory_text_lines:
+            self.victory_text_lines = [
+                f"EXP gained: {self.victory_info.get('exp', 0)}",
+                f"Gold found: {self.victory_info.get('gold', 0)}g",
+            ]
+        lines = [title] + self.victory_text_lines
         text_h = self.r.font.get_height()
         w = max(self.r.font_big.size(lines[0])[0], max(self.r.font.size(l)[0] for l in lines[1:])) + pad_x * 2
         h = text_h * (len(lines) + 2) + pad_y * 2 + 12
@@ -3327,12 +3337,29 @@ class Game:
         pygame.draw.rect(view, (16, 24, 16), rect)
         pygame.draw.rect(view, YELLOW, rect, 2)
         # Title
-        self.r.text_big(view, lines[0], (x + pad_x, y + pad_y), YELLOW)
+        self.r.text_big(view, title, (x + pad_x, y + pad_y), YELLOW)
+
+        # Typewriter effect for result lines (sequential across lines)
+        now = pygame.time.get_ticks()
+        if not self.victory_done:
+            elapsed = max(0, now - self.victory_type_t0)
+            target = int(self.victory_type_cps * (elapsed / 1000.0))
+            self.victory_type_chars = max(self.victory_type_chars, target)
+
+        total = sum(len(s) for s in self.victory_text_lines)
+        shown = min(total, self.victory_type_chars)
         cy = y + pad_y + text_h + 8
-        for ln in lines[1:]:
-            self.r.text(view, ln, (x + pad_x, cy))
+        remaining = shown
+        for ln in self.victory_text_lines:
+            n = min(len(ln), max(0, remaining))
+            text = ln[:n]
+            self.r.text(view, text, (x + pad_x, cy))
+            remaining -= n
             cy += text_h
-        self.r.text_small(view, "Enter: Continue", (x + pad_x, cy + 8), LIGHT)
+
+        self.victory_done = (shown >= total)
+        if self.victory_done:
+            self.r.text_small(view, "Enter: Continue", (x + pad_x, cy + 8), LIGHT)
 
     def draw_defeat(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -3368,8 +3395,13 @@ class Game:
     def victory_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
-                # Return to labyrinth after victory
-                self.mode = MODE_MAZE
+                # If typewriter not finished, reveal instantly; otherwise continue
+                if not self.victory_done:
+                    self.victory_type_chars = sum(len(s) for s in self.victory_text_lines)
+                    self.victory_done = True
+                else:
+                    # Return to labyrinth after victory
+                    self.mode = MODE_MAZE
         # no-op additional rendering in victory input
 
     # --------------- Gold helpers ---------------
@@ -3410,12 +3442,21 @@ class Game:
             if not self.combat_intro_done_triggered:
                 self.combat_intro_done_triggered = True
                 self.in_battle.next_turn()
+            # Only react to battle end states when battle_over is set
             if self.in_battle.battle_over:
                 if self.in_battle.result == 'victory':
                     # Capture victory results for display
                     exp = getattr(self.in_battle, 'victory_exp', 0)
                     gold = getattr(self.in_battle, 'victory_gold', 0)
                     self.victory_info = {'exp': exp, 'gold': gold}
+                    # Prepare typewriter state for victory screen
+                    self.victory_text_lines = [
+                        f"EXP gained: {exp}",
+                        f"Gold found: {gold}g",
+                    ]
+                    self.victory_type_t0 = pygame.time.get_ticks()
+                    self.victory_type_chars = 0
+                    self.victory_done = False
                     self.mode = MODE_VICTORY
                 elif self.in_battle.result == 'fled':
                     self.mode = MODE_MAZE
