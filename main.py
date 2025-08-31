@@ -33,6 +33,11 @@ FPS = 60
 FONT_NAME = None
 FONT_PATH = "fonts/prstart.ttf"
 
+# Music asset filenames (placed in project root or alongside main.py)
+MUSIC_TOWN = "town.wav"
+MUSIC_LABYRINTH = "labyrinth.wav"
+MUSIC_BATTLE = "battle.wav"
+
 MAZE_W, MAZE_H = 24, 24
 
 WHITE = (240, 240, 240)
@@ -99,6 +104,111 @@ CLASS_COSTS = {"Thief": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
 
 DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 DIR_NAMES = ["N", "E", "S", "W"]
+
+
+class MusicManager:
+    def __init__(self):
+        self.enabled = False
+        try:
+            pygame.mixer.init()
+            self.enabled = True
+        except Exception:
+            self.enabled = False
+            return
+        # Preload available tracks
+        self.tracks: Dict[str, Optional[pygame.mixer.Sound]] = {
+            'town': self._load_sound(MUSIC_TOWN),
+            'labyrinth': self._load_sound(MUSIC_LABYRINTH),
+            'battle': self._load_sound(MUSIC_BATTLE),
+        }
+        # Two channels for crossfading
+        try:
+            self.chan_a = pygame.mixer.Channel(0)
+            self.chan_b = pygame.mixer.Channel(1)
+        except Exception:
+            self.enabled = False
+            return
+        self.chan_a.set_volume(1.0)
+        self.chan_b.set_volume(1.0)
+        self.current_key: Optional[str] = None
+        self.current_channel: Optional[pygame.mixer.Channel] = None
+
+    def _load_sound(self, filename: str) -> Optional[pygame.mixer.Sound]:
+        if not filename:
+            return None
+        try_paths = [filename, os.path.join('data', filename)]
+        for p in try_paths:
+            if os.path.exists(p):
+                try:
+                    return pygame.mixer.Sound(p)
+                except Exception:
+                    return None
+        return None
+
+    def _pick_inactive(self) -> pygame.mixer.Channel:
+        # Use the other channel than the current, default to A
+        return self.chan_b if self.current_channel is self.chan_a else self.chan_a
+
+    def crossfade_to(self, key: str, fade_ms: int = 1200):
+        if not self.enabled:
+            return
+        if key == self.current_key:
+            return
+        snd = self.tracks.get(key)
+        # If target missing, just fade out current to silence
+        if snd is None:
+            self.fade_out_all(fade_ms)
+            self.current_key = None
+            self.current_channel = None
+            return
+        new_ch = self._pick_inactive()
+        # Fade out current
+        if self.current_channel:
+            try:
+                self.current_channel.fadeout(max(0, int(fade_ms)))
+            except Exception:
+                pass
+        # Fade in new on the other channel, loop indefinitely
+        try:
+            new_ch.set_volume(1.0)
+            new_ch.play(snd, loops=-1, fade_ms=max(0, int(fade_ms)))
+        except Exception:
+            return
+        self.current_channel = new_ch
+        self.current_key = key
+
+    def play_immediate(self, key: str):
+        if not self.enabled:
+            return
+        snd = self.tracks.get(key)
+        # Stop everything first
+        try:
+            self.chan_a.stop(); self.chan_b.stop()
+        except Exception:
+            pass
+        if snd is None:
+            self.current_key = None
+            self.current_channel = None
+            return
+        # Play immediately, loop indefinitely
+        try:
+            self.chan_a.set_volume(1.0)
+            self.chan_a.play(snd, loops=-1)
+            self.current_channel = self.chan_a
+            self.current_key = key
+        except Exception:
+            pass
+
+    def fade_out_all(self, fade_ms: int = 1000):
+        if not self.enabled:
+            return
+        try:
+            self.chan_a.fadeout(max(0, int(fade_ms)))
+            self.chan_b.fadeout(max(0, int(fade_ms)))
+        except Exception:
+            pass
+        self.current_key = None
+        self.current_channel = None
 
 
 def roll_stat():
@@ -1296,6 +1406,9 @@ class Game:
         ]
         self.ripple_phase: float = 0.0
 
+        # Music
+        self.music = MusicManager()
+
         # Data
         self.items_list: List[Dict[str, Any]] = []
         self.items_by_id: Dict[str, Dict[str, Any]] = {}
@@ -1366,6 +1479,9 @@ class Game:
         # Defeat screen fade
         self.defeat_t0: int = 0
 
+        # Track mode transitions for audio changes
+        self._last_mode: Optional[str] = None
+
 
     def load_json(self, path: str, default):
         try:
@@ -1396,6 +1512,28 @@ class Game:
         # Skills
         skills = self.load_json(os.path.join('data', 'skills.json'), {})
         self.skills_config = skills.get('classes', {})
+
+    # --------------- Audio / Music ---------------
+    def on_mode_changed(self, old_mode: Optional[str], new_mode: str):
+        # Crossfade between town and labyrinth; immediate start for battle; fade out on victory.
+        if not self.music.enabled:
+            return
+        try:
+            if new_mode == MODE_TOWN:
+                self.music.crossfade_to('town', fade_ms=1200)
+            elif new_mode == MODE_MAZE:
+                self.music.crossfade_to('labyrinth', fade_ms=1200)
+            elif new_mode in (MODE_COMBAT_INTRO, MODE_BATTLE):
+                # Start battle immediately (no crossfade)
+                self.music.play_immediate('battle')
+            elif new_mode == MODE_VICTORY:
+                # Fade the battle music to silence
+                self.music.fade_out_all(fade_ms=1500)
+            elif new_mode == MODE_TITLE:
+                # Keep title silent; gently fade out anything playing
+                self.music.fade_out_all(fade_ms=700)
+        except Exception:
+            pass
 
     # --------------- Save/Load ---------------
     def save(self, path="save.json"):
@@ -3247,6 +3385,11 @@ class Game:
                         self.battle_input(event)
 
             self.update()
+
+            # Detect and react to mode changes for music control
+            if self._last_mode != self.mode:
+                self.on_mode_changed(self._last_mode, self.mode)
+                self._last_mode = self.mode
 
             if self.mode == MODE_TITLE:
                 # Title renders fullscreen and hides log
