@@ -33,6 +33,11 @@ FPS = 60
 FONT_NAME = None
 FONT_PATH = "fonts/prstart.ttf"
 
+# Music asset filenames (placed in project root or alongside main.py)
+MUSIC_TOWN = "town.wav"
+MUSIC_LABYRINTH = "labyrinth.wav"
+MUSIC_BATTLE = "battle.wav"
+
 MAZE_W, MAZE_H = 24, 24
 
 WHITE = (240, 240, 240)
@@ -64,6 +69,7 @@ MODE_PAUSE = "PAUSE"
 MODE_ITEMS = "ITEMS"
 MODE_COMBAT_INTRO = "COMBAT_INTRO"
 MODE_EQUIP = "EQUIP"
+MODE_SCENE = "SCENE"  # town<->labyrinth transition
 
 # Temple costs
 TEMPLE_HEAL_PARTY_COST = 30
@@ -99,6 +105,111 @@ CLASS_COSTS = {"Thief": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
 
 DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 DIR_NAMES = ["N", "E", "S", "W"]
+
+
+class MusicManager:
+    def __init__(self):
+        self.enabled = False
+        try:
+            pygame.mixer.init()
+            self.enabled = True
+        except Exception:
+            self.enabled = False
+            return
+        # Preload available tracks
+        self.tracks: Dict[str, Optional[pygame.mixer.Sound]] = {
+            'town': self._load_sound(MUSIC_TOWN),
+            'labyrinth': self._load_sound(MUSIC_LABYRINTH),
+            'battle': self._load_sound(MUSIC_BATTLE),
+        }
+        # Two channels for crossfading
+        try:
+            self.chan_a = pygame.mixer.Channel(0)
+            self.chan_b = pygame.mixer.Channel(1)
+        except Exception:
+            self.enabled = False
+            return
+        self.chan_a.set_volume(1.0)
+        self.chan_b.set_volume(1.0)
+        self.current_key: Optional[str] = None
+        self.current_channel: Optional[pygame.mixer.Channel] = None
+
+    def _load_sound(self, filename: str) -> Optional[pygame.mixer.Sound]:
+        if not filename:
+            return None
+        try_paths = [filename, os.path.join('data', filename)]
+        for p in try_paths:
+            if os.path.exists(p):
+                try:
+                    return pygame.mixer.Sound(p)
+                except Exception:
+                    return None
+        return None
+
+    def _pick_inactive(self) -> pygame.mixer.Channel:
+        # Use the other channel than the current, default to A
+        return self.chan_b if self.current_channel is self.chan_a else self.chan_a
+
+    def crossfade_to(self, key: str, fade_ms: int = 1200):
+        if not self.enabled:
+            return
+        if key == self.current_key:
+            return
+        snd = self.tracks.get(key)
+        # If target missing, just fade out current to silence
+        if snd is None:
+            self.fade_out_all(fade_ms)
+            self.current_key = None
+            self.current_channel = None
+            return
+        new_ch = self._pick_inactive()
+        # Fade out current
+        if self.current_channel:
+            try:
+                self.current_channel.fadeout(max(0, int(fade_ms)))
+            except Exception:
+                pass
+        # Fade in new on the other channel, loop indefinitely
+        try:
+            new_ch.set_volume(1.0)
+            new_ch.play(snd, loops=-1, fade_ms=max(0, int(fade_ms)))
+        except Exception:
+            return
+        self.current_channel = new_ch
+        self.current_key = key
+
+    def play_immediate(self, key: str):
+        if not self.enabled:
+            return
+        snd = self.tracks.get(key)
+        # Stop everything first
+        try:
+            self.chan_a.stop(); self.chan_b.stop()
+        except Exception:
+            pass
+        if snd is None:
+            self.current_key = None
+            self.current_channel = None
+            return
+        # Play immediately, loop indefinitely
+        try:
+            self.chan_a.set_volume(1.0)
+            self.chan_a.play(snd, loops=-1)
+            self.current_channel = self.chan_a
+            self.current_key = key
+        except Exception:
+            pass
+
+    def fade_out_all(self, fade_ms: int = 1000):
+        if not self.enabled:
+            return
+        try:
+            self.chan_a.fadeout(max(0, int(fade_ms)))
+            self.chan_b.fadeout(max(0, int(fade_ms)))
+        except Exception:
+            pass
+        self.current_key = None
+        self.current_channel = None
 
 
 def roll_stat():
@@ -1296,6 +1407,9 @@ class Game:
         ]
         self.ripple_phase: float = 0.0
 
+        # Music
+        self.music = MusicManager()
+
         # Data
         self.items_list: List[Dict[str, Any]] = []
         self.items_by_id: Dict[str, Dict[str, Any]] = {}
@@ -1366,6 +1480,17 @@ class Game:
         # Defeat screen fade
         self.defeat_t0: int = 0
 
+        # Track mode transitions for audio changes
+        self._last_mode: Optional[str] = None
+
+        # Scene transition (town <-> labyrinth)
+        self.scene_active: bool = False
+        self.scene_from: Optional[str] = None
+        self.scene_to: Optional[str] = None
+        self.scene_stage: int = 0  # 0 fade-out, 1 hold, 2 fade-in
+        self.scene_t0: int = 0
+        self.scene_dur: Tuple[int, int, int] = (0, 0, 0)
+
 
     def load_json(self, path: str, default):
         try:
@@ -1396,6 +1521,101 @@ class Game:
         # Skills
         skills = self.load_json(os.path.join('data', 'skills.json'), {})
         self.skills_config = skills.get('classes', {})
+
+    # --------------- Audio / Music ---------------
+    def on_mode_changed(self, old_mode: Optional[str], new_mode: str):
+        # Crossfade between town and labyrinth; immediate start for battle; fade out on victory.
+        # Intercept town <-> maze transitions to run a longer fade-to-black scene transition
+        if (old_mode in (MODE_TOWN, MODE_MAZE)) and (new_mode in (MODE_TOWN, MODE_MAZE)):
+            # Start visual transition
+            # Longer timings to make the fade more noticeable
+            fade_out, hold, fade_in = 1000, 300, 1100
+            self.start_scene_transition(new_mode, fade_out, hold, fade_in)
+            # Start a slightly longer music crossfade to match the scene change
+            total = fade_out + hold + fade_in
+            if self.music.enabled:
+                if new_mode == MODE_TOWN:
+                    self.music.crossfade_to('town', fade_ms=total)
+                else:
+                    self.music.crossfade_to('labyrinth', fade_ms=total)
+            return
+        # Ignore events from transition finishing
+        if old_mode == MODE_SCENE:
+            return
+        if not self.music.enabled:
+            return
+        try:
+            if new_mode == MODE_TOWN:
+                self.music.crossfade_to('town', fade_ms=1200)
+            elif new_mode == MODE_MAZE:
+                self.music.crossfade_to('labyrinth', fade_ms=1200)
+            elif new_mode in (MODE_COMBAT_INTRO, MODE_BATTLE):
+                # Start battle immediately (no crossfade)
+                self.music.play_immediate('battle')
+            elif new_mode == MODE_VICTORY:
+                # Fade the battle music to silence
+                self.music.fade_out_all(fade_ms=1500)
+            elif new_mode == MODE_TITLE:
+                # Keep title silent; gently fade out anything playing
+                self.music.fade_out_all(fade_ms=700)
+        except Exception:
+            pass
+
+    def start_scene_transition(self, to_mode: str, fade_out_ms: int, hold_ms: int, fade_in_ms: int):
+        self.scene_active = True
+        self.scene_from = self.mode  # current visual
+        self.scene_to = to_mode
+        self.scene_stage = 0
+        self.scene_t0 = pygame.time.get_ticks()
+        self.scene_dur = (fade_out_ms, hold_ms, fade_in_ms)
+        self.mode = MODE_SCENE
+
+    def draw_scene_transition(self):
+        # 0: fade-out from scene_from, 1: black hold, 2: fade-in to scene_to
+        now = pygame.time.get_ticks()
+        fade_out_ms, hold_ms, fade_in_ms = self.scene_dur
+        t = now - self.scene_t0
+        stage = self.scene_stage
+        # Decide which background to render
+        if stage == 0:
+            # draw from-scene
+            if self.scene_from == MODE_TOWN:
+                self.draw_town()
+            else:
+                self.draw_maze()
+            # overlay increasing black
+            p = max(0.0, min(1.0, t / max(1, fade_out_ms)))
+            alpha = int(255 * p)
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+            view.blit(overlay, (0, 0))
+            if t >= fade_out_ms:
+                self.scene_stage = 1
+                self.scene_t0 = now
+        elif stage == 1:
+            # full black screen during hold
+            view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+            view.fill((0, 0, 0))
+            if t >= hold_ms:
+                self.scene_stage = 2
+                self.scene_t0 = now
+        else:
+            # fade-in to target scene
+            if self.scene_to == MODE_TOWN:
+                self.draw_town()
+            else:
+                self.draw_maze()
+            p = max(0.0, min(1.0, t / max(1, fade_in_ms)))
+            alpha = int(255 * (1.0 - p))
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+            view.blit(overlay, (0, 0))
+            if t >= fade_in_ms:
+                # end transition
+                self.scene_active = False
+                self.mode = self.scene_to or MODE_MAZE
 
     # --------------- Save/Load ---------------
     def save(self, path="save.json"):
@@ -3248,6 +3468,11 @@ class Game:
 
             self.update()
 
+            # Detect and react to mode changes for music control
+            if self._last_mode != self.mode:
+                self.on_mode_changed(self._last_mode, self.mode)
+                self._last_mode = self.mode
+
             if self.mode == MODE_TITLE:
                 # Title renders fullscreen and hides log
                 self.draw_title()
@@ -3258,6 +3483,9 @@ class Game:
                 elif self.mode == MODE_COMBAT_INTRO:
                     # Show maze background during intro flashes
                     self.draw_maze()
+                elif self.mode == MODE_SCENE:
+                    # Custom town<->maze fade with black hold
+                    self.draw_scene_transition()
                 elif self.mode == MODE_PARTY:
                     self.draw_party()
                 elif self.mode == MODE_FORM:
