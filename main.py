@@ -3623,13 +3623,11 @@ class Game:
         if self.mode in (MODE_MAZE, MODE_COMBAT_INTRO, MODE_SCENE) and self.move_active:
             now = pygame.time.get_ticks()
             p = max(0.0, min(1.0, (now - self.move_t0) / max(1, self.move_dur)))
-            # Trigger two footstep sounds around 25% and 75%
+            # Trigger a single footstep sound once during movement
             try:
-                if self.move_step_sfx_count == 0 and p >= 0.25:
+                if self.move_step_sfx_count == 0 and p >= 0.33:
                     self.sfx.play('step', 0.8)
-                    self.move_step_sfx_count = 1
-                elif self.move_step_sfx_count == 1 and p >= 0.75:
-                    self.sfx.play('step', 0.8)
+                    # Skip to 2 so it won't trigger again this move
                     self.move_step_sfx_count = 2
             except Exception:
                 pass
