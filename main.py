@@ -1491,7 +1491,7 @@ class Battle:
 class Game:
     def __init__(self):
         pygame.init()
-        pygame.display.set_caption("Wizardry‑style Dungeon RPG (Top‑down)")
+        pygame.display.set_caption("Dankest Deilou")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.r = Renderer(self.screen)
