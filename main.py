@@ -2544,11 +2544,15 @@ class Game:
         self.r.text_big(view, "Training Grounds", (20, 16))
         y = 56
         self.r.text_small(view, "Each level costs 100 EXP.", (32, y)); y += 18
-        options = [f"{m.name} — Lv{m.level}  EXP {m.exp}" for m in self.party.members] or ["(no characters)"]
+        # Build menu: list party members (if any) + Back. Ensure index wraps across all entries.
+        member_count = len(self.party.members)
+        options = [f"{m.name} — Lv{m.level}  EXP {m.exp}" for m in self.party.members] if member_count > 0 else []
         if not hasattr(self, 'training_index'):
             self.training_index = 0
-        self.training_index = self.training_index % max(1, len(options))
-        self.r.draw_center_menu(options + ["Back"], self.training_index)
+        total_entries = max(1, member_count + 1)  # members + Back, or just Back if none
+        self.training_index = self.training_index % total_entries
+        display = options + ["Back"] if member_count > 0 else ["Back"]
+        self.r.draw_center_menu(display, self.training_index)
 
     def training_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -3623,13 +3627,11 @@ class Game:
         if self.mode in (MODE_MAZE, MODE_COMBAT_INTRO, MODE_SCENE) and self.move_active:
             now = pygame.time.get_ticks()
             p = max(0.0, min(1.0, (now - self.move_t0) / max(1, self.move_dur)))
-            # Trigger two footstep sounds around 25% and 75%
+            # Trigger a single footstep sound once during movement
             try:
-                if self.move_step_sfx_count == 0 and p >= 0.25:
+                if self.move_step_sfx_count == 0 and p >= 0.33:
                     self.sfx.play('step', 0.8)
-                    self.move_step_sfx_count = 1
-                elif self.move_step_sfx_count == 1 and p >= 0.75:
-                    self.sfx.play('step', 0.8)
+                    # Skip to 2 so it won't trigger again this move
                     self.move_step_sfx_count = 2
             except Exception:
                 pass
