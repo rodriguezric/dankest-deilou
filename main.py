@@ -1592,6 +1592,10 @@ class Game:
 
         # Save/Load menu index
         self.saveload_index = 0
+        # Save/Load confirmations
+        self.saveload_confirm_active: bool = False
+        self.saveload_confirm_kind: Optional[str] = None  # 'save' | 'load'
+        self.saveload_confirm_index: int = 1  # 0 Yes, 1 No (default No)
         # Title screen menu index
         self.title_index = 0
 
@@ -1623,6 +1627,15 @@ class Game:
         self.scene_stage: int = 0  # 0 fade-out, 1 hold, 2 fade-in
         self.scene_t0: int = 0
         self.scene_dur: Tuple[int, int, int] = (0, 0, 0)
+
+        # Save confirmation overlay
+        self.save_feedback_active: bool = False
+        self.save_feedback_t0: int = 0
+
+        # Load transition (fade-out, load, fade-in to town)
+        self.load_feedback_active: bool = False
+        self.load_feedback_stage: int = 0  # 0 fade-out, 1 fade-in
+        self.load_feedback_t0: int = 0
 
 
     def load_json(self, path: str, default):
@@ -1704,6 +1717,69 @@ class Game:
         self.scene_dur = (fade_out_ms, hold_ms, fade_in_ms)
         self.mode = MODE_SCENE
 
+    # --------------- Save feedback overlay ---------------
+    def start_save_feedback(self):
+        # Begin a brief visual confirmation for saving
+        self.save_feedback_active = True
+        self.save_feedback_t0 = pygame.time.get_ticks()
+
+    def start_load_feedback(self):
+        # Begin fade-out, then load, then fade-in to town
+        self.load_feedback_active = True
+        self.load_feedback_stage = 0
+        self.load_feedback_t0 = pygame.time.get_ticks()
+
+    def draw_save_feedback(self):
+        if not self.save_feedback_active:
+            return
+        now = pygame.time.get_ticks()
+        dt = now - self.save_feedback_t0
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        # Quick white flash; no popup
+        if dt < 120:
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((255, 255, 255, 220))
+            view.blit(overlay, (0, 0))
+        else:
+            # End feedback quickly and return to town
+            self.save_feedback_active = False
+            self.mode = MODE_TOWN
+
+    def draw_load_feedback(self):
+        if not self.load_feedback_active:
+            return
+        now = pygame.time.get_ticks()
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        if self.load_feedback_stage == 0:
+            # Fade to black over 400ms on current screen
+            dt = now - self.load_feedback_t0
+            dur = 400
+            p = max(0.0, min(1.0, dt / dur))
+            alpha = int(255 * p)
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            view.blit(overlay, (0, 0))
+            if dt >= dur:
+                # Perform the load once, then switch to town and fade back in
+                try:
+                    self.load()
+                except Exception:
+                    pass
+                self.mode = MODE_TOWN
+                self.load_feedback_stage = 1
+                self.load_feedback_t0 = now
+        else:
+            # Fade back in from black over 500ms while drawing town
+            dt = now - self.load_feedback_t0
+            dur = 500
+            p = max(0.0, min(1.0, dt / dur))
+            alpha = int(255 * (1.0 - p))
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            view.blit(overlay, (0, 0))
+            if dt >= dur:
+                self.load_feedback_active = False
+
     def draw_scene_transition(self):
         # 0: fade-out from scene_from, 1: black hold, 2: fade-in to scene_to
         now = pygame.time.get_ticks()
@@ -1762,6 +1838,8 @@ class Game:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
         self.log.add("Game saved.")
+        # Trigger visual confirmation
+        self.start_save_feedback()
 
     def load(self, path="save.json"):
         if not os.path.exists(path):
@@ -1775,6 +1853,8 @@ class Game:
         self.pos = tuple(data.get("pos", (2, 2)))
         self.facing = int(data.get("facing", 1))
         self.log.add("Game loaded.")
+        # After loading, ensure town menu starts at the top choice
+        self.menu_index = 0
 
     
     def draw_title(self):
@@ -2590,18 +2670,64 @@ class Game:
         self.r.text_big(view, "Save / Load", (20, 16))
         opts = ["Save", "Load", "Back"]
         self.r.draw_center_menu(opts, self.saveload_index)
+        # Confirmation popup overlay
+        if getattr(self, 'saveload_confirm_active', False):
+            s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            s.fill((0, 0, 0, 160))
+            view.blit(s, (0, 0))
+            title = "Save game?" if self.saveload_confirm_kind == 'save' else "Load game?"
+            self.r.text_big(view, title, (WIDTH//2 - 120, 100), YELLOW)
+            self.r.draw_center_menu(["Yes", "No"], self.saveload_confirm_index)
 
     def saveload_input(self, event):
         if event.type == pygame.KEYDOWN:
+            # Ignore input while save/load transition overlays are active
+            if getattr(self, 'save_feedback_active', False) or getattr(self, 'load_feedback_active', False):
+                return
+            # Handle confirmation mode
+            if getattr(self, 'saveload_confirm_active', False):
+                if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
+                    self.saveload_confirm_index = 1 - self.saveload_confirm_index
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.saveload_confirm_index == 0:  # Yes
+                        kind = self.saveload_confirm_kind
+                        self.saveload_confirm_active = False
+                        self.saveload_confirm_kind = None
+                        self.saveload_confirm_index = 1
+                        if kind == 'save':
+                            self.save()
+                        elif kind == 'load':
+                            # Only begin transition if a save file exists
+                            path = "save.json"
+                            if os.path.exists(path):
+                                # Start fade-out/in transition and perform load mid-way
+                                self.start_load_feedback()
+                            else:
+                                self.log.add("No save file found.")
+                    else:  # No
+                        self.saveload_confirm_active = False
+                        self.saveload_confirm_kind = None
+                        self.saveload_confirm_index = 1
+                elif event.key == pygame.K_ESCAPE:
+                    self.saveload_confirm_active = False
+                    self.saveload_confirm_kind = None
+                    self.saveload_confirm_index = 1
+                return
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.saveload_index = (self.saveload_index - 1) % 3
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.saveload_index = (self.saveload_index + 1) % 3
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 if self.saveload_index == 0:
-                    self.save()
+                    # ask to confirm save
+                    self.saveload_confirm_active = True
+                    self.saveload_confirm_kind = 'save'
+                    self.saveload_confirm_index = 1
                 elif self.saveload_index == 1:
-                    self.load()
+                    # ask to confirm load
+                    self.saveload_confirm_active = True
+                    self.saveload_confirm_kind = 'load'
+                    self.saveload_confirm_index = 1
                 else:
                     self.mode = MODE_TOWN
             elif event.key == pygame.K_ESCAPE:
@@ -3701,6 +3827,9 @@ class Game:
                 if event.type == pygame.QUIT:
                     running = False
                 else:
+                    # Ignore inputs during save/load overlays
+                    if getattr(self, 'save_feedback_active', False) or getattr(self, 'load_feedback_active', False):
+                        continue
                     if self.mode == MODE_TITLE:
                         self.title_input(event)
                     elif self.mode == MODE_TOWN:
@@ -3787,6 +3916,9 @@ class Game:
                 elif self.mode == MODE_BATTLE:
                     self.draw_battle()
 
+                # Overlays that can appear on top
+                self.draw_save_feedback()
+                self.draw_load_feedback()
                 # Draw message log for non-title scenes (with typewriter effect)
                 self.r.draw_log(self.log.render_lines())
             pygame.display.flip()
