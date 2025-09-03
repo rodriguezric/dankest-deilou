@@ -2544,11 +2544,15 @@ class Game:
         self.r.text_big(view, "Training Grounds", (20, 16))
         y = 56
         self.r.text_small(view, "Each level costs 100 EXP.", (32, y)); y += 18
-        options = [f"{m.name} — Lv{m.level}  EXP {m.exp}" for m in self.party.members] or ["(no characters)"]
+        # Build menu: list party members (if any) + Back. Ensure index wraps across all entries.
+        member_count = len(self.party.members)
+        options = [f"{m.name} — Lv{m.level}  EXP {m.exp}" for m in self.party.members] if member_count > 0 else []
         if not hasattr(self, 'training_index'):
             self.training_index = 0
-        self.training_index = self.training_index % max(1, len(options))
-        self.r.draw_center_menu(options + ["Back"], self.training_index)
+        total_entries = max(1, member_count + 1)  # members + Back, or just Back if none
+        self.training_index = self.training_index % total_entries
+        display = options + ["Back"] if member_count > 0 else ["Back"]
+        self.r.draw_center_menu(display, self.training_index)
 
     def training_input(self, event):
         if event.type == pygame.KEYDOWN:
