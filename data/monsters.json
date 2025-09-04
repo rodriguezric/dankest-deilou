@@ -50,5 +50,18 @@
     "gold_low": 2,
     "gold_high": 10,
     "agi": 9
+  },
+  {
+    "id": "slime",
+    "name": "Slime",
+    "hp_low": 6,
+    "hp_high": 12,
+    "ac": 11,
+    "atk_low": 1,
+    "atk_high": 3,
+    "exp": 14,
+    "gold_low": 0,
+    "gold_high": 6,
+    "agi": 5
   }
 ]

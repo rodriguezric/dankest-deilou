@@ -627,6 +627,7 @@
   ],
   "encounters": {
     "monsters": [
+      "slime",
       "giant_rat",
       "goblin"
     ],
