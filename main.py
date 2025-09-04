@@ -401,6 +401,7 @@ class Party:
 
 @dataclass
 class Enemy:
+    id: str
     name: str
     hp: int
     ac: int
@@ -410,11 +411,13 @@ class Enemy:
     gold_low: int
     gold_high: int
     agi: int = 8
+    drops: List[Dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def from_base(base: Dict[str, Any]):
         hp = random.randint(base.get("hp_low", 6), base.get("hp_high", 10))
         return Enemy(
+            id=base.get("id", base.get("name", "monster").lower().replace(' ', '_')),
             name=base.get("name", "Monster"),
             hp=hp,
             ac=int(base.get("ac", 8)),
@@ -424,6 +427,7 @@ class Enemy:
             gold_low=int(base.get("gold_low", 1)),
             gold_high=int(base.get("gold_high", 8)),
             agi=int(base.get("agi", random.randint(5, 12))),
+            drops=list(base.get("drops", [])) if isinstance(base.get("drops", []), list) else [],
         )
 
 
@@ -1256,8 +1260,25 @@ class Battle:
         it = self.items_by_id.get(iid)
         if not it or it.get('type') != 'consumable':
             return None
-        # For now only handle healing potions
-        heal = it.get('heal', 0)
+        # Consumables can restore HP and/or MP. Prefer MP if present, else HP.
+        if ('mp' in it) or ('mp_low' in it) or ('mp_high' in it):
+            low = int(it.get('mp_low', it.get('mp', 0)))
+            high = int(it.get('mp_high', it.get('mp', low)))
+            if high < low:
+                low, high = high, low
+            mp = random.randint(low, high)
+            gi = self.party.members.index(actor)
+            return {
+                'type': 'mp', 'actor_side': 'party', 'actor_index': gi,
+                'target_side': 'party', 'target_index': target_gi,
+                'mp': mp, 'actor_name': actor.name,
+            }
+        # Otherwise, HP heal
+        low = int(it.get('heal_low', it.get('heal', 0)))
+        high = int(it.get('heal_high', it.get('heal', low)))
+        if high < low:
+            low, high = high, low
+        heal = random.randint(low, high)
         gi = self.party.members.index(actor)
         return {
             'type': 'heal', 'actor_side': 'party', 'actor_index': gi,
@@ -1385,6 +1406,20 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(f"{act.get('actor_name','Priest')} heals {t.name} for {t.hp - before}.")
+        elif act['type'] == 'mp':
+            gi = act['target_index']
+            amt = max(0, int(act.get('mp', 0)))
+            if 0 <= gi < len(self.party.members):
+                t = self.party.members[gi]
+                before = t.mp
+                t.mp = min(t.max_mp, t.mp + amt)
+                # MP floater (party)
+                self.add_floater('party', gi, str(amt), 800, BLUE)
+                try:
+                    self.sfx.play('heal', 0.5)
+                except Exception:
+                    pass
+                self.log.add(f"{act.get('actor_name','Adventurer')} restores {t.name}'s MP by {t.mp - before}.")
         elif act['type'] == 'run':
             if act.get('success'):
                 self.log.add("You fled!")
@@ -1409,16 +1444,39 @@ class Battle:
             self.next_after_anim = {'actor_side': 'enemy'}  # dummy to keep loop flowing
             return
         total_exp = random.randint(20, 60)
-        total_gold = random.randint(10, 40)
+        # Gold based on each enemy's range (allows per-monster zero gold)
+        total_gold = 0
+        try:
+            for e in self.enemies:
+                total_gold += random.randint(int(e.gold_low), int(e.gold_high))
+        except Exception:
+            total_gold = max(0, total_gold)
+        # Roll item drops per enemy
+        loot_counts: Dict[str, int] = {}
+        for e in self.enemies:
+            for drop in getattr(e, 'drops', []) or []:
+                try:
+                    iid = drop.get('iid') or drop.get('id')
+                    ch = float(drop.get('chance', 0))
+                    if iid and ch > 0 and random.random() < ch:
+                        loot_counts[iid] = loot_counts.get(iid, 0) + 1
+                except Exception:
+                    continue
         alive = self.party.alive_active_members()
         for m in alive:
             m.exp += total_exp // max(1, len(alive))
         # Gold now goes to the party pool
         self.party.gold += total_gold
+        # Award items to party inventory
+        for iid, c in loot_counts.items():
+            for _ in range(c):
+                self.party.inventory.append(iid)
         # Do not log battle results here; show them only on the Victory screen
         # Record for victory screen
         self.victory_exp = total_exp
         self.victory_gold = total_gold
+        # Also record loot for Game to display
+        self.victory_loot = loot_counts
         self.battle_over = True
         self.result = 'victory'
 
@@ -3051,10 +3109,33 @@ class Game:
         if not it:
             self.log.add("Nothing happens.")
             return
-        if it["id"] == "potion_small":
-            before = target.hp
-            target.hp = min(target.max_hp, target.hp + it.get("heal", 0))
-            self.log.add(f"{target.name} drinks a potion (+{target.hp - before} HP).")
+        if it.get('type') == 'consumable':
+            name = it.get('name', 'Item')
+            lower = name.lower()
+            # HP heal
+            if ('heal' in it) or ('heal_low' in it) or ('heal_high' in it):
+                low = int(it.get('heal_low', it.get('heal', 0)))
+                high = int(it.get('heal_high', it.get('heal', low)))
+                if high < low:
+                    low, high = high, low
+                heal = random.randint(low, high)
+                before = target.hp
+                target.hp = min(target.max_hp, target.hp + heal)
+                verb = 'eats' if 'cheese' in lower else ('drinks' if ('potion' in lower or 'droplet' in lower) else 'uses')
+                self.log.add(f"{target.name} {verb} {name} (+{target.hp - before} HP).")
+            # MP restore
+            elif ('mp' in it) or ('mp_low' in it) or ('mp_high' in it):
+                low = int(it.get('mp_low', it.get('mp', 0)))
+                high = int(it.get('mp_high', it.get('mp', low)))
+                if high < low:
+                    low, high = high, low
+                gain = random.randint(low, high)
+                before = target.mp
+                target.mp = min(target.max_mp, target.mp + gain)
+                verb = 'drinks'
+                self.log.add(f"{target.name} {verb} {name} (+{target.mp - before} MP).")
+        else:
+            self.log.add("Nothing happens.")
 
     # --------------- Equip ---------------
     def _slot_name(self, ix: int) -> str:
@@ -3803,12 +3884,18 @@ class Game:
                     # Capture victory results for display
                     exp = getattr(self.in_battle, 'victory_exp', 0)
                     gold = getattr(self.in_battle, 'victory_gold', 0)
-                    self.victory_info = {'exp': exp, 'gold': gold}
+                    loot = getattr(self.in_battle, 'victory_loot', {}) or {}
+                    self.victory_info = {'exp': exp, 'gold': gold, 'loot': loot}
                     # Prepare typewriter state for victory screen
-                    self.victory_text_lines = [
-                        f"EXP gained: {exp}",
-                        f"Gold found: {gold}g",
-                    ]
+                    lines = [f"EXP gained: {exp}", f"Gold found: {gold}g"]
+                    if loot:
+                        # Build a compact item list using item names
+                        parts = []
+                        for iid, cnt in loot.items():
+                            name = self.items_by_id.get(iid, {}).get('name', iid)
+                            parts.append(f"{name} x{cnt}")
+                        lines.append("Items found: " + ", ".join(parts))
+                    self.victory_text_lines = lines
                     self.victory_type_t0 = pygame.time.get_ticks()
                     self.victory_type_chars = 0
                     self.victory_done = False

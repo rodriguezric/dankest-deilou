@@ -28,6 +28,22 @@
     "price": 50
   },
   {
+    "id": "cheese",
+    "name": "Cheese",
+    "type": "consumable",
+    "heal_low": 1,
+    "heal_high": 2,
+    "price": 10
+  },
+  {
+    "id": "droplet",
+    "name": "Droplet",
+    "type": "consumable",
+    "mp_low": 1,
+    "mp_high": 1,
+    "price": 20
+  },
+  {
     "id": "helm",
     "name": "Helm",
     "type": "accessory",
