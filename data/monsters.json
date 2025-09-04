@@ -8,9 +8,12 @@
     "atk_low": 1,
     "atk_high": 4,
     "exp": 12,
-    "gold_low": 1,
-    "gold_high": 8,
-    "agi": 7
+    "gold_low": 0,
+    "gold_high": 0,
+    "agi": 7,
+    "drops": [
+      { "iid": "cheese", "chance": 0.3 }
+    ]
   },
   {
     "id": "goblin",
@@ -61,7 +64,10 @@
     "atk_high": 3,
     "exp": 14,
     "gold_low": 0,
-    "gold_high": 6,
-    "agi": 5
+    "gold_high": 0,
+    "agi": 5,
+    "drops": [
+      { "iid": "droplet", "chance": 0.1 }
+    ]
   }
 ]
