@@ -603,7 +603,8 @@ class Renderer:
     # ---- Top‑down centered & larger ----
     def draw_topdown(self, grid, pos: Tuple[int, int], facing: int, level_ix: int,
                      world_shift_tiles: Tuple[float, float] = (0.0, 0.0), player_bob_px: int = 0,
-                     player_frac: Tuple[float, float] = (0.0, 0.0)):
+                     player_frac: Tuple[float, float] = (0.0, 0.0),
+                     visible_tiles: set = None, seen_tiles: set = None, apply_fov: bool = False):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 22))
         px, py = pos
@@ -640,12 +641,32 @@ class Renderer:
         pygame.draw.circle(view, PURPLE, (pxs, pys), max(4, cell // 4))
         d = DIRS[facing]
         pygame.draw.line(view, PURPLE, (pxs, pys), (pxs + d[0] * max(10, cell // 2), pys + d[1] * max(10, cell // 2)), 2)
-        # Apply a torch-like FOV: LOS-based, cone-shaped, with subtle flicker
-        pxf = px + float(player_frac[0])
-        pyf = py + float(player_frac[1])
-        self._overlay_torch_fov(view, grid, px, py, facing, cell, ox, oy, radius,
-                                 world_px_off=int(shift_px[0]), world_py_off=int(shift_px[1]),
-                                 player_center_frac=(pxf, pyf))
+        # Optional overlays: fog-of-war or legacy torch FOV
+        if seen_tiles is not None:
+            fog = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            now = pygame.time.get_ticks() / 1000.0
+            for y in range(py - radius, py + radius + 1):
+                for x in range(px - radius, px + radius + 1):
+                    if not (0 <= x < len(grid[0]) and 0 <= y < len(grid)):
+                        continue
+                    sx = ox + (x - (px - radius)) * cell + int(shift_px[0])
+                    sy = oy + (y - (py - radius)) * cell + int(shift_px[1])
+                    rect = pygame.Rect(sx, sy, max(1, cell - 1), max(1, cell - 1))
+                    if (x, y) not in seen_tiles:
+                        # Unseen: match the maze background color for a seamless fog look
+                        pygame.draw.rect(fog, (18, 18, 22, 255), rect)
+                    else:
+                        # Seen: dimmer if not currently visible (lighter than fog of war)
+                        if visible_tiles is None or (x, y) not in visible_tiles:
+                            pygame.draw.rect(fog, (0, 0, 0, 90), rect)
+            view.blit(fog, (0, 0))
+        elif apply_fov:
+            # Legacy torch FOV
+            pxf = px + float(player_frac[0])
+            pyf = py + float(player_frac[1])
+            self._overlay_torch_fov(view, grid, px, py, facing, cell, ox, oy, radius,
+                                     world_px_off=int(shift_px[0]), world_py_off=int(shift_px[1]),
+                                     player_center_frac=(pxf, pyf))
         self.text_small(view, f"L{level_ix} pos {pos} {DIR_NAMES[facing]}", (12, 6))
 
     def _overlay_vision_cone(self, surf: pygame.Surface, center: Tuple[int, int], facing: int,
@@ -1897,6 +1918,8 @@ class Game:
         self.temple_revive_index = 0
 
         self.encounter_rate = 0.22
+        # Fog of war: per-level memory of seen tiles
+        self.seen_by_level: Dict[int, set] = {}
         # Victory screen info
         self.victory_info: Dict[str, Any] = {}
         # Victory typewriter
@@ -3122,9 +3145,16 @@ class Game:
         if self.move_active:
             dx, dy = DIRS[self.facing]
             frac = (dx * move_p, dy * move_p)
-        self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix, shift_tiles, bob_px, frac)
+        # Compute FOV-visible tiles and update fog-of-war memory
+        visible_tiles = self.compute_visible_tiles(radius=4)
+        seen = self.seen_by_level.setdefault(self.level_ix, set())
+        for t in visible_tiles:
+            seen.add(t)
+        # Draw with fog-of-war overlay (pass both visible and seen)
+        self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix, shift_tiles, bob_px, frac,
+                            visible_tiles=visible_tiles, seen_tiles=seen, apply_fov=False)
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
-        self.r.text_small(view, "Esc: Menu  ↑: Move  ←/→: Turn", (12, VIEW_H - 22), LIGHT)
+        # Removed on-screen controls display for a cleaner labyrinth view
         # During combat intro flashes, overlay on maze
         if self.mode == MODE_COMBAT_INTRO and self.combat_intro_active:
             now = pygame.time.get_ticks()
@@ -3134,6 +3164,41 @@ class Game:
                 alpha = 220 if (self.combat_intro_stage == 0 and t < 180) or (self.combat_intro_stage == 2 and t < 180) else 0
                 overlay.fill((255, 255, 255, alpha))
             view.blit(overlay, (0, 0))
+
+    def compute_visible_tiles(self, radius: int = 4, spread_deg: float = 80.0) -> set:
+        # Compute LOS-visible tiles around player using renderer helpers
+        grid = self.grid()
+        px, py = self.pos
+        facing = self.facing
+        visible: set = set()
+        try:
+            ang_face = self.r._angle_for_facing(facing)
+            half = math.radians(spread_deg) / 2.0
+            pxf, pyf = float(px), float(py)
+            for ty in range(py - radius, py + radius + 1):
+                if not (0 <= ty < len(grid)):
+                    continue
+                for tx in range(px - radius, px + radius + 1):
+                    if not (0 <= tx < len(grid[0])):
+                        continue
+                    dx = tx - pxf; dy = ty - pyf
+                    if dx * dx + dy * dy > (radius + 0.5) * (radius + 0.5):
+                        continue
+                    ang = math.atan2(dy, dx)
+                    near3 = (max(abs(dx), abs(dy)) <= 1.0)
+                    if not near3:
+                        if self.r._angle_diff(ang, ang_face) > half:
+                            continue
+                        los_px, los_py = int(round(pxf)), int(round(pyf))
+                        if not self.r._los_clear(grid, los_px, los_py, tx, ty):
+                            continue
+                    visible.add((tx, ty))
+        except Exception:
+            # Fallback: simple radius without LOS
+            for ty in range(py - radius, py + radius + 1):
+                for tx in range(px - radius, px + radius + 1):
+                    visible.add((tx, ty))
+        return visible
 
     def maze_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -3553,6 +3618,9 @@ class Game:
             return
         if event.type == pygame.KEYDOWN:
             if b.state == 'menu':
+                # Guard against early input before the menu is populated
+                if not b.ui_menu_options:
+                    return
                 if event.key in (pygame.K_UP, pygame.K_k):
                     b.ui_menu_index = (b.ui_menu_index - 1) % len(b.ui_menu_options)
                     self.sfx.play('ui_move', 0.5)
@@ -3968,19 +4036,7 @@ class Game:
         # Draw animated ripple rings and soft sine-wave bands to make the battle
         # background slightly more visible and wavy, while staying subtle.
         now = pygame.time.get_ticks() / 1000.0
-        # Ripple rings ------------------------------------------------------
-        rings = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
-        base_radius = 28
-        ring_gap = 34
-        speed = 0.9
-        amp = 12
-        ring_color = (120, 140, 220, 36)  # increased alpha for visibility
-        for cx, cy in self.ripple_centers:
-            for k in range(3):
-                r = base_radius + k * ring_gap + int(amp * (1.0 + math.sin(now * speed + k * 1.8)) * 0.5)
-                pygame.draw.circle(rings, ring_color, (cx, cy), max(2, r), 2)
-        rings.set_alpha(120)
-        surf.blit(rings, (0, 0))
+        # Ripple rings removed per request — keep background bands only
 
         # Wavy horizontal bands --------------------------------------------
         waves = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
