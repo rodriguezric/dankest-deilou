@@ -542,9 +542,9 @@ class HitEffects:
     def __init__(self):
         self.effects: Dict[Tuple[str, int], Dict[str, Any]] = {}
 
-    def trigger(self, kind: str, index: int, duration_ms: int = 300, intensity: int = 5):
+    def trigger(self, kind: str, index: int, duration_ms: int = 300, intensity: int = 5, color: Tuple[int, int, int] = RED):
         now = pygame.time.get_ticks()
-        self.effects[(kind, index)] = {"until": now + duration_ms, "duration": duration_ms, "intensity": intensity}
+        self.effects[(kind, index)] = {"until": now + duration_ms, "duration": duration_ms, "intensity": intensity, "color": color}
 
     def sample(self, kind: str, index: int, base_color=WHITE) -> Tuple[Tuple[int, int], Tuple[int, int, int]]:
         now = pygame.time.get_ticks()
@@ -560,7 +560,8 @@ class HitEffects:
         amp = max(1, int(e["intensity"] * (0.5 + 0.5 * frac)))
         ox = random.randint(-amp, amp)
         oy = random.randint(-amp, amp)
-        color = RED if (now // 60) % 2 == 0 else base_color
+        flash_color = e.get("color", RED)
+        color = flash_color if (now // 60) % 2 == 0 else base_color
         return (ox, oy), color
 
 
@@ -862,10 +863,11 @@ class Renderer:
             cy += text_h
 
     # ---- Combat HUDs ----
-    def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None, offsets: Dict[int, int] = None) -> Dict[int, pygame.Rect]:
+    def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None, offsets: Dict[int, int] = None, offsets_x: Dict[int, int] = None) -> Dict[int, pygame.Rect]:
         highlight = highlight or set()
         acting = acting or set()
         offsets = offsets or {}
+        offsets_x = offsets_x or {}
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         members = party.active_members()
         if not members:
@@ -891,7 +893,7 @@ class Renderer:
                     border_col = YELLOW
                 elif gi in highlight:
                     border_col = YELLOW
-            rx = x + i * (w + gap) + ox
+            rx = x + i * (w + gap) + ox + int(offsets_x.get(gi, 0))
             # Apply optional lunge offset (negative moves up)
             ry = y + oy + int(offsets.get(gi, 0))
             rect = pygame.Rect(rx, ry, w, h)
@@ -904,11 +906,13 @@ class Renderer:
             rects[gi] = rect
         return rects
 
-    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None, dying: Dict[int, float] = None, offsets: Dict[int, int] = None) -> Dict[int, pygame.Rect]:
+    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None, dying: Dict[int, float] = None, offsets: Dict[int, int] = None, offsets_x: Dict[int, int] = None, rotations: Dict[int, float] = None) -> Dict[int, pygame.Rect]:
         highlight = highlight or set()
         acting = acting or set()
         dying = dying or {}
         offsets = offsets or {}
+        offsets_x = offsets_x or {}
+        rotations = rotations or {}
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         alive = [(i, e) for i, e in enumerate(enemies) if e.hp > 0]
         # include dying entries for fade-out (keep original index order)
@@ -940,13 +944,14 @@ class Renderer:
                     border_col = YELLOW
                 elif i in highlight:
                     border_col = YELLOW
-            rx = x + j * (w + gap) + ox
+            rx = x + j * (w + gap) + ox + int(offsets_x.get(i, 0))
             # Apply optional lunge offset (positive moves down)
             ry = y + oy + int(offsets.get(i, 0))
             rect = pygame.Rect(rx, ry, w, h)
-            # draw to a temp surface if fading
+            # draw to a temp surface if fading or rotating
             fade_p = dying.get(i, 0.0)
-            if fade_p > 0:
+            angle = float(rotations.get(i, 0.0))
+            if fade_p > 0 or abs(angle) > 0.01:
                 alpha = max(0, min(255, int(255 * (1.0 - fade_p))))
                 temp = pygame.Surface((w, h), pygame.SRCALPHA)
                 pygame.draw.rect(temp, (20, 20, 28), temp.get_rect())
@@ -954,8 +959,15 @@ class Renderer:
                 name = e.name[:14]
                 temp.blit(self.font.render(name, True, border_col), (8, 6))
                 temp.blit(self.font_small.render(f"HP {max(0,e.hp):>2}", True, WHITE), (8, 26))
-                temp.set_alpha(alpha)
-                view.blit(temp, (rx, ry))
+                if abs(angle) > 0.01:
+                    rot = pygame.transform.rotate(temp, angle)
+                    rot.set_alpha(alpha)
+                    # center the rotated surface over original rect
+                    rrect = rot.get_rect(center=(rx + w // 2, ry + h // 2))
+                    view.blit(rot, rrect.topleft)
+                else:
+                    temp.set_alpha(alpha)
+                    view.blit(temp, (rx, ry))
             else:
                 pygame.draw.rect(view, (20, 20, 28), rect)
                 pygame.draw.rect(view, border_col, rect, 2)
@@ -1071,6 +1083,13 @@ class Battle:
         self.dying_enemies: Dict[int, Dict[str, int]] = {}  # i -> {'start':ms,'dur':ms}
         self.downed_party: Dict[int, Dict[str, int]] = {}   # gi -> {'start':ms,'dur':ms}
 
+        # Enemy AI state flags
+        self.slime_pulsed: Dict[int, bool] = {}  # enemy index -> True if next action must Splash
+        self.goblin_stolen: Dict[int, Optional[str]] = {}    # enemy index -> iid stolen
+        self.goblin_steal_used: Dict[int, bool] = {}         # enemy index -> attempted steal already
+        self.escaped_enemies: set = set()                    # indexes that fled (no rewards)
+        self.enemy_spin: Dict[int, Dict[str, int]] = {}      # enemy index -> {'start':ms,'dur':ms}
+
     def start_random(self, allowed: Optional[List[str]] = None, group: Tuple[int, int] = (1, 3)):
         # Build enemy group from allowed ids and monster base data
         ids = [k for k in (allowed or list(self.monsters_by_id.keys())) if k in self.monsters_by_id]
@@ -1151,23 +1170,126 @@ class Battle:
             self.ui_menu_options.append(('run', 'Run'))
             self.skill_menu_index = 0
         else:
-            # Enemy acts automatically (basic attack random target)
-            e = self.enemies[ix]
-            targets = self.party.alive_active_members()
-            if not targets:
-                self.finish_defeat(); return
-            t = random.choice(targets)
-            gi = self.party.members.index(t)
-            hit = random.random() < 0.65
-            dmg = random.randint(e.atk_low, e.atk_high)
-            act = {
-                'type': 'attack',
-                'actor_side': 'enemy', 'actor_index': ix,
+            # Enemy AI chooses an action based on monster id/state
+            act = self.enemy_choose_action(ix)
+            if act is None:
+                # fallback basic attack
+                e = self.enemies[ix]
+                targets = self.party.alive_active_members()
+                if not targets:
+                    self.finish_defeat(); return
+                t = random.choice(targets)
+                gi = self.party.members.index(t)
+                hit = random.random() < 0.65
+                dmg = random.randint(e.atk_low, e.atk_high)
+                act = {
+                    'type': 'attack',
+                    'actor_side': 'enemy', 'actor_index': ix,
+                    'target_side': 'party', 'target_index': gi,
+                    'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                    'miss_label': f"{e.name} misses {t.name}.",
+                }
+            self.start_animation(act)
+
+    def enemy_choose_action(self, ix: int) -> Optional[Dict[str, Any]]:
+        if ix < 0 or ix >= len(self.enemies):
+            return None
+        e = self.enemies[ix]
+        # Skip if dead
+        if e.hp <= 0:
+            return None
+        # Generic target list
+        targets = self.party.alive_active_members()
+        if not targets:
+            self.finish_defeat(); return None
+        t = random.choice(targets)
+        gi = self.party.members.index(t)
+        # Dispatch by id
+        mid = getattr(e, 'id', e.name.lower())
+        # Giant Rat
+        if mid == 'giant_rat':
+            r = random.random()
+            if r < 0.6:
+                # Attack
+                hit = random.random() < 0.65
+                dmg = random.randint(e.atk_low, e.atk_high)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
+            elif r < 0.9:
+                # Chitter (emote)
+                return {'type': 'emote', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} chitters nervously."}
+            else:
+                # Eat Cheese (heal 1)
+                return {'type': 'e_heal', 'actor_side': 'enemy', 'actor_index': ix,
+                        'amount': 1, 'label': f"{e.name} eats some cheese and feels better."}
+        # Slime
+        if mid == 'slime':
+            if self.slime_pulsed.get(ix):
+                # Must Splash now
+                return {'type': 'splash', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} splashes out into the team!"}
+            # Otherwise choose Attack or Pulse equally
+            if random.random() < 0.5:
+                hit = True  # slime attacks always hit for simplicity
+                dmg = max(1, e.atk_low)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
+            else:
+                # Pulse prepares Splash next turn
+                return {'type': 'pulse', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} pulses eerily..."}
+        # Goblin
+        if mid == 'goblin':
+            # Adjusted probabilities if stolen
+            has_stolen = bool(self.goblin_stolen.get(ix))
+            r = random.random()
+            if has_stolen:
+                # 50% run attempt, else attack/trip
+                if r < 0.5:
+                    return {'type': 'run_enemy', 'actor_side': 'enemy', 'actor_index': ix,
+                            'label': f"{e.name} tries to run away!"}
+                # Else fallback to attack or trip
+                r = random.random()
+                if r < 0.7:
+                    hit = random.random() < 0.65
+                    dmg = random.randint(e.atk_low, e.atk_high)
+                    return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                            'target_side': 'party', 'target_index': gi,
+                            'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                            'miss_label': f"{e.name} misses {t.name}."}
+                else:
+                    return {'type': 'trip', 'actor_side': 'enemy', 'actor_index': ix,
+                            'label': f"{e.name} loses its footing and trips!"}
+            # Default: mostly attack, sometimes trip/steal, rarely run
+            if r < 0.6:
+                hit = random.random() < 0.65
+                dmg = random.randint(e.atk_low, e.atk_high)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
+            elif r < 0.8:
+                # Trip
+                return {'type': 'trip', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} loses its footing and trips!"}
+            elif r < 0.95 and not self.goblin_steal_used.get(ix):
+                return {'type': 'steal', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} eyes your belongings..."}
+            else:
+                return {'type': 'run_enemy', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} looks for an escape!"}
+        # Fallback: attack
+        hit = random.random() < 0.65
+        dmg = random.randint(e.atk_low, e.atk_high)
+        return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                 'target_side': 'party', 'target_index': gi,
                 'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
-                'miss_label': f"{e.name} misses {t.name}.",
-            }
-            self.start_animation(act)
+                'miss_label': f"{e.name} misses {t.name}."}
 
     def advance_turn(self):
         # Move to next token and trigger next_turn
@@ -1251,6 +1373,9 @@ class Battle:
         now = pygame.time.get_ticks()
         # Staged timing: windup (actor flashes) -> pre-impact pause -> impact (target animates) -> recover
         self.anim = {'action': action, 'stage': 0, 't0': now, 'dur': [240, 140, 240, 160]}
+        # Slightly longer pre-impact pause for certain enemy skills (e.g., Goblin Trip)
+        if action.get('type') == 'trip':
+            self.anim['dur'] = [240, 220, 260, 180]
         self.state = 'anim'
 
     def add_floater(self, side: str, index: int, text: str, dur: int = 700, color=WHITE):
@@ -1336,6 +1461,14 @@ class Battle:
                     self.next_after_anim = {'actor_side': act['actor_side'], 'type': act.get('type'), 'run_success': act.get('success', False)}
                     self.pause_until = now + self.pause_between_ms
                     self.state = 'postpause'
+                # During pre-impact for Goblin Trip, play a MISS sfx once before the spin
+                if stage == 1 and act.get('type') == 'trip' and not a.get('trip_pre_sfx'):
+                    a['trip_pre_sfx'] = True
+                    try:
+                        if self.sfx:
+                            self.sfx.play('miss', 0.6)
+                    except Exception:
+                        pass
         elif self.state == 'postpause' and now >= self.pause_until:
             if self.check_end_and_maybe_finish():
                 return
@@ -1420,6 +1553,96 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(f"{act.get('actor_name','Adventurer')} restores {t.name}'s MP by {t.mp - before}.")
+        elif act['type'] == 'emote':
+            # Enemy emote/log only
+            label = act.get('label')
+            if label:
+                self.log.add(label)
+        elif act['type'] == 'e_heal':
+            ix = act.get('actor_index', -1)
+            amt = int(act.get('amount', 1))
+            if 0 <= ix < len(self.enemies):
+                e = self.enemies[ix]
+                before = e.hp
+                e.hp = max(0, e.hp + amt)
+                # heal floater (enemy)
+                self.add_floater('enemy', ix, str(amt), 800, YELLOW)
+                try:
+                    self.sfx.play('heal', 0.5)
+                except Exception:
+                    pass
+                self.log.add(act.get('label', f"{e.name} heals."))
+        elif act['type'] == 'pulse':
+            ix = act.get('actor_index', -1)
+            if 0 <= ix < len(self.enemies):
+                self.slime_pulsed[ix] = True
+                # Start a shake effect by repeatedly retriggering in draw
+                self.log.add(act.get('label', 'It pulses eerily...'))
+        elif act['type'] == 'splash':
+            ix = act.get('actor_index', -1)
+            if 0 <= ix < len(self.enemies):
+                e = self.enemies[ix]
+                alive_gi = [i for i in self.party.active if 0 <= i < len(self.party.members) and self.party.members[i].alive and self.party.members[i].hp > 0]
+                hits = 0
+                for gi in alive_gi:
+                    t = self.party.members[gi]
+                    t.hp = max(0, t.hp - 1)
+                    hits += 1
+                    # green flash on party windows (longer, slightly stronger)
+                    self.effects.trigger('party', gi, 420, 7, GREEN)
+                    self.add_floater('party', gi, '1', 700, YELLOW)
+                # recoil damage to slime
+                e.hp = max(0, e.hp - hits)
+                if e.hp <= 0:
+                    self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                self.log.add(act.get('label', f"{e.name} splashes!"))
+                # play party hurt sfx once when splash lands
+                if hits > 0:
+                    try:
+                        if self.sfx:
+                            self.sfx.play('party_hurt', 0.7)
+                    except Exception:
+                        pass
+                # Clear pulse flag
+                if ix in self.slime_pulsed:
+                    self.slime_pulsed.pop(ix, None)
+        elif act['type'] == 'trip':
+            ix = act.get('actor_index', -1)
+            if 0 <= ix < len(self.enemies):
+                e = self.enemies[ix]
+                dmg = random.randint(1, 3)
+                e.hp = max(0, e.hp - dmg)
+                self.add_floater('enemy', ix, str(dmg), 800, WHITE)
+                # spin effect
+                self.enemy_spin[ix] = {'start': pygame.time.get_ticks(), 'dur': 500}
+                if e.hp <= 0:
+                    self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                self.log.add(act.get('label', f"{e.name} trips!"))
+        elif act['type'] == 'steal':
+            ix = act.get('actor_index', -1)
+            self.goblin_steal_used[ix] = True
+            if self.party.inventory and random.random() < 0.5:
+                # steal a random item
+                iid = random.choice(self.party.inventory)
+                try:
+                    self.party.inventory.remove(iid)
+                except ValueError:
+                    pass
+                self.goblin_stolen[ix] = iid
+                self.log.add(f"{self.enemies[ix].name} steals your {self.items_by_id.get(iid, {}).get('name', iid)}!")
+            else:
+                self.log.add(f"{self.enemies[ix].name} fails to steal anything.")
+        elif act['type'] == 'run_enemy':
+            ix = act.get('actor_index', -1)
+            if 0 <= ix < len(self.enemies):
+                if random.random() < 0.5:
+                    # Mark as escaped and fade out
+                    self.escaped_enemies.add(ix)
+                    self.log.add(f"{self.enemies[ix].name} runs away!")
+                    self.enemies[ix].hp = 0
+                    self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 500}
+                else:
+                    self.log.add(f"{self.enemies[ix].name} fails to run!")
         elif act['type'] == 'run':
             if act.get('success'):
                 self.log.add("You fled!")
@@ -1447,13 +1670,17 @@ class Battle:
         # Gold based on each enemy's range (allows per-monster zero gold)
         total_gold = 0
         try:
-            for e in self.enemies:
+            for i, e in enumerate(self.enemies):
+                if i in self.escaped_enemies:
+                    continue
                 total_gold += random.randint(int(e.gold_low), int(e.gold_high))
         except Exception:
             total_gold = max(0, total_gold)
         # Roll item drops per enemy
         loot_counts: Dict[str, int] = {}
-        for e in self.enemies:
+        for i, e in enumerate(self.enemies):
+            if i in self.escaped_enemies:
+                continue
             for drop in getattr(e, 'drops', []) or []:
                 try:
                     iid = drop.get('iid') or drop.get('id')
@@ -1462,6 +1689,13 @@ class Battle:
                         loot_counts[iid] = loot_counts.get(iid, 0) + 1
                 except Exception:
                     continue
+        # Return stolen items from defeated goblins
+        for i, iid in list(self.goblin_stolen.items()):
+            if iid and (i not in self.escaped_enemies):
+                # ensure the thief is actually defeated
+                e = self.enemies[i] if 0 <= i < len(self.enemies) else None
+                if e and e.hp <= 0:
+                    loot_counts[iid] = loot_counts.get(iid, 0) + 1
         alive = self.party.alive_active_members()
         for m in alive:
             m.exp += total_exp // max(1, len(alive))
@@ -3526,6 +3760,9 @@ class Game:
         # Actor lunge offsets during animation
         offsets_enemy: Dict[int, int] = {}
         offsets_party: Dict[int, int] = {}
+        offsets_enemy_x: Dict[int, int] = {}
+        offsets_party_x: Dict[int, int] = {}
+        rotations_enemy: Dict[int, float] = {}
         if b and b.state == 'anim' and b.anim:
             act = b.anim['action']
             stage = b.anim.get('stage', 0)
@@ -3566,9 +3803,54 @@ class Game:
             elif act.get('actor_side') == 'enemy' and act.get('actor_index') is not None:
                 # Enemy lunges downward (positive y)
                 offsets_enemy[act['actor_index']] = off
+            # If an attack/spell missed, slide the target sideways on impact and return during recover
+            if act.get('type') in ('attack', 'spell') and not act.get('hit', True):
+                target_ix = act.get('target_index')
+                target_side = act.get('target_side')
+                # Direction based on index parity for variation
+                dir_ = -1 if (target_ix or 0) % 2 == 0 else 1
+                max_dx = 12
+                dx = 0
+                if len(durs) >= 4:
+                    if stage == 2:
+                        # move out
+                        pe = 1.0 - (1.0 - p) * (1.0 - p)
+                        dx = int(max_dx * pe) * dir_
+                    elif stage == 3:
+                        # move back
+                        dx = int(max_dx * (1.0 - p)) * dir_
+                else:
+                    if stage == 1:
+                        dx = int(max_dx) * dir_
+                    elif stage == 2:
+                        dx = int(max_dx * (1.0 - p)) * dir_
+                if target_side == 'party' and target_ix is not None:
+                    offsets_party_x[target_ix] = dx
+                elif target_side == 'enemy' and target_ix is not None:
+                    offsets_enemy_x[target_ix] = dx
 
-        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog, offsets_enemy) if b else {}
-        party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting, offsets_party)
+        # Persistent enemy effects: slime pulse shake and goblin spin
+        if b:
+            now = pygame.time.get_ticks()
+            # Slime shake: retrigger small jitter while pulsed
+            for i, e in enumerate(b.enemies):
+                if getattr(e, 'hp', 0) > 0 and b.slime_pulsed.get(i):
+                    self.effects.trigger('enemy', i, 120, 4, WHITE)
+            # Goblin trip spin: compute rotation angle over duration
+            to_remove = []
+            for i, info in b.enemy_spin.items():
+                start = info.get('start', now)
+                dur = max(1, info.get('dur', 500))
+                p = max(0.0, min(1.0, (now - start) / float(dur)))
+                angle = 360.0 * p
+                rotations_enemy[i] = angle
+                if p >= 1.0:
+                    to_remove.append(i)
+            for i in to_remove:
+                b.enemy_spin.pop(i, None)
+
+        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog, offsets_enemy, offsets_enemy_x, rotations_enemy) if b else {}
+        party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting, offsets_party, offsets_party_x)
         # Turn order panel on the left (vertically centered, padded)
         if b and b.turn_order:
             inner_px, inner_py = 10, 10
