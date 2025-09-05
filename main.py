@@ -1439,6 +1439,11 @@ class Battle:
         # prune finished defeat animations
         self.dying_enemies = {i: d for i, d in self.dying_enemies.items() if now - d['start'] < d['dur']}
         self.downed_party = {i: d for i, d in self.downed_party.items() if now - d['start'] < d['dur']}
+        # Safety: if all enemies are defeated and no death animations remain, finalize victory
+        if not self.battle_over and not self.dying_enemies and not self.enemy_alive():
+            self.finish_victory()
+            # After forcing victory, stop updating further this frame
+            return
         if self.battle_over:
             return
         if self.state == 'anim' and self.anim:
@@ -1661,7 +1666,10 @@ class Battle:
                     self.escaped_enemies.add(ix)
                     self.log.add(f"{self.enemies[ix].name} runs away!")
                     self.enemies[ix].hp = 0
-                    self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 500}
+                    # If that was the last remaining enemy, don't add a dying animation
+                    # so the battle can end immediately on the post-pause check.
+                    if self.enemy_alive():
+                        self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 500}
                 else:
                     self.log.add(f"{self.enemies[ix].name} fails to run!")
         elif act['type'] == 'run':
@@ -1917,7 +1925,15 @@ class Game:
         self.temple_menu_index = 0  # 0 Heal party, 1 Revive member
         self.temple_revive_index = 0
 
-        self.encounter_rate = 0.22
+        # Threat mechanic replaces flat random encounters
+        self.encounter_rate = 0.0  # legacy, unused
+        self.threat: int = 0
+        self.threat_max: int = 100
+        self.threat_step_inc: int = 18  # per completed step
+        self.threat_red_threshold: int = 75
+        self.threat_full_steps: int = 0  # steps taken while meter is full
+        self.threat_flash_active: bool = False
+        self.threat_flash_t0: int = 0
         # Fog of war: per-level memory of seen tiles
         self.seen_by_level: Dict[int, set] = {}
         # Victory screen info
@@ -3155,6 +3171,12 @@ class Game:
                             visible_tiles=visible_tiles, seen_tiles=seen, apply_fov=False)
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Removed on-screen controls display for a cleaner labyrinth view
+        # Draw threat flash (when meter is full) and indicator (top-right)
+        try:
+            self.draw_threat_flash()
+            self.draw_threat_indicator()
+        except Exception:
+            pass
         # During combat intro flashes, overlay on maze
         if self.mode == MODE_COMBAT_INTRO and self.combat_intro_active:
             now = pygame.time.get_ticks()
@@ -3199,6 +3221,57 @@ class Game:
                 for tx in range(px - radius, px + radius + 1):
                     visible.add((tx, ty))
         return visible
+
+    def draw_threat_indicator(self):
+        # Simple vertical bar at top-right showing threat from green->yellow->orange->red
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        w, h = 14, 92
+        margin = 10
+        x = WIDTH - w - margin
+        y = margin
+        # Background frame
+        pygame.draw.rect(view, (24, 24, 28), (x, y, w, h))
+        pygame.draw.rect(view, (70, 70, 80), (x, y, w, h), 1)
+        # Fill based on threat fraction
+        frac = 0.0
+        try:
+            frac = max(0.0, min(1.0, self.threat / float(max(1, self.threat_max))))
+        except Exception:
+            pass
+        filled = int(h * frac)
+        # Color by fraction
+        if frac < 0.33:
+            col = (60, 200, 90)    # green
+        elif frac < 0.66:
+            col = (220, 200, 60)   # yellow
+        elif frac < 0.90:
+            col = (240, 140, 60)   # orange
+        else:
+            col = (230, 70, 60)    # red
+        # Draw from bottom up
+        if filled > 0:
+            pygame.draw.rect(view, col, (x + 2, y + h - filled + 2, w - 4, filled - 4))
+
+    def trigger_threat_flash(self):
+        self.threat_flash_active = True
+        self.threat_flash_t0 = pygame.time.get_ticks()
+
+    def draw_threat_flash(self):
+        if not getattr(self, 'threat_flash_active', False):
+            return
+        now = pygame.time.get_ticks()
+        dt = now - getattr(self, 'threat_flash_t0', now)
+        dur = 180
+        if dt >= dur:
+            self.threat_flash_active = False
+            return
+        # Ease-out alpha over duration
+        p = max(0.0, min(1.0, dt / float(dur)))
+        alpha = int(160 * (1.0 - p))
+        overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        overlay.fill((200, 40, 40, alpha))
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.blit(overlay, (0, 0))
 
     def maze_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -4189,8 +4262,31 @@ class Game:
                 t = self.grid()[y][x]
                 special = t in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
                 self.check_special_tile()
-                if self.mode == MODE_MAZE and not special and random.random() < self.encounter_rate:
-                    self.start_battle()
+                # Threat mechanic: increase per step, only trigger after staying full for at least one extra step
+                if self.mode == MODE_MAZE and not special:
+                    try:
+                        prev = self.threat
+                        self.threat = min(self.threat_max, self.threat + self.threat_step_inc)
+                    except Exception:
+                        pass
+                    if self.threat >= self.threat_max:
+                        # trigger a brief red flash each step while full
+                        try:
+                            self.trigger_threat_flash()
+                        except Exception:
+                            pass
+                        if self.threat_full_steps == 0:
+                            # First time reaching full (or first step while full): do not trigger yet
+                            self.threat_full_steps = 1
+                        else:
+                            # Already spent at least 1 step while full — 50% chance to trigger now
+                            if random.random() < 0.5:
+                                self.start_battle()
+                                self.threat = 0
+                                self.threat_full_steps = 0
+                    else:
+                        # Not full: reset full-steps tracker
+                        self.threat_full_steps = 0
         # Handle combat intro sequence across modes
         if self.combat_intro_active:
             now = pygame.time.get_ticks()
@@ -4224,6 +4320,9 @@ class Game:
                     gold = getattr(self.in_battle, 'victory_gold', 0)
                     loot = getattr(self.in_battle, 'victory_loot', {}) or {}
                     self.victory_info = {'exp': exp, 'gold': gold, 'loot': loot}
+                    # Reset threat after combat
+                    self.threat = 0
+                    self.threat_full_steps = 0
                     # Prepare typewriter state for victory screen
                     lines = [f"EXP gained: {exp}", f"Gold found: {gold}g"]
                     if loot:
@@ -4239,8 +4338,14 @@ class Game:
                     self.victory_done = False
                     self.mode = MODE_VICTORY
                 elif self.in_battle.result == 'fled':
+                    # Reset threat after combat
+                    self.threat = 0
+                    self.threat_full_steps = 0
                     self.mode = MODE_MAZE
                 else:
+                    # defeat: also reset threat (new run starts safe)
+                    self.threat = 0
+                    self.threat_full_steps = 0
                     self.defeat_t0 = pygame.time.get_ticks()
                     self.mode = MODE_DEFEAT
 
