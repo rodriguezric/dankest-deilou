@@ -82,6 +82,7 @@ T_WALL = 1
 T_TOWN = 2
 T_STAIRS_D = 3
 T_STAIRS_U = 4
+T_LOCKED = 5
 
 # Limits
 ACTIVE_MAX = 4
@@ -656,6 +657,13 @@ class Renderer:
                             pygame.draw.polygon(view, YELLOW, [(sx + cell // 5, sy + cell // 5), (sx + cell - cell // 5, sy + cell // 5), (sx + cell // 2, sy + cell - cell // 5)])
                         elif t == T_STAIRS_U:
                             pygame.draw.polygon(view, GREEN, [(sx + cell // 5, sy + cell - cell // 5), (sx + cell - cell // 5, sy + cell - cell // 5), (sx + cell // 2, sy + cell // 5)])
+                        elif t == T_LOCKED:
+                            # Draw a locked door as a thick line with a small lock glyph
+                            pygame.draw.rect(view, (36, 28, 22), (sx, sy + cell//3, cell - 1, cell//3))
+                            pygame.draw.rect(view, (120, 100, 60), (sx, sy + cell//3, cell - 1, cell//3), 2)
+                            # lock
+                            lx = sx + cell//2 - 4; ly = sy + cell//2 - 6
+                            pygame.draw.rect(view, (200, 180, 90), (lx, ly, 8, 8), 1)
         # Draw chests on top of floor tiles (simple icon), within the radius window
         if chests:
             for c in chests:
@@ -2012,6 +2020,11 @@ class Game:
         except Exception:
             pass
 
+        # Door unlock confirmation
+        self.door_confirm_active: bool = False
+        self.door_confirm_index: int = 1  # 0 Yes, 1 No
+        self.door_confirm_pos: Optional[Tuple[int, int]] = None
+
 
     def load_json(self, path: str, default):
         try:
@@ -3144,7 +3157,7 @@ class Game:
 
     def is_open(self, x, y):
         g = self.grid()
-        return self.in_bounds(x, y) and g[y][x] != T_WALL
+        return self.in_bounds(x, y) and g[y][x] not in (T_WALL, T_LOCKED)
 
     def step_forward(self):
         dx, dy = DIRS[self.facing]
@@ -3158,7 +3171,33 @@ class Game:
                 self.move_t0 = pygame.time.get_ticks()
                 self.move_step_sfx_count = 0
         else:
-            self.log.add("You bump into a wall.")
+            # Try door unlock if locked door ahead
+            try:
+                t = self.grid()[ny][nx]
+            except Exception:
+                t = T_WALL
+            if t == T_LOCKED:
+                if self.party_has_rogue():
+                    # Pick the lock automatically
+                    self.grid()[ny][nx] = T_EMPTY
+                    self.log.add("You pick the lock.")
+                    # then move forward
+                    if not self.move_active:
+                        self.move_active = True
+                        self.move_from = self.pos
+                        self.move_to = (nx, ny)
+                        self.move_t0 = pygame.time.get_ticks()
+                        self.move_step_sfx_count = 0
+                else:
+                    # If the party has a Key, offer to use it
+                    if 'key' in self.party.inventory:
+                        self.door_confirm_active = True
+                        self.door_confirm_index = 1  # default No
+                        self.door_confirm_pos = (nx, ny)
+                    else:
+                        self.log.add("The door is locked.")
+            else:
+                self.log.add("You bump into a wall.")
 
     def turn_left(self):
         self.facing = (self.facing - 1) % 4
@@ -3251,6 +3290,7 @@ class Game:
             self.draw_threat_flash()
             self.draw_threat_indicator()
             self.draw_treasure_popup()
+            self.draw_door_confirm()
         except Exception:
             pass
         # During combat intro flashes, overlay on maze
@@ -3307,6 +3347,18 @@ class Game:
         saved = self.chests_state.get(ix)
         if isinstance(saved, list):
             lvl.chests = list(saved)
+
+    def party_has_rogue(self) -> bool:
+        # Check active, alive members for Rogue class
+        try:
+            for gi in self.party.active:
+                if 0 <= gi < len(self.party.members):
+                    m = self.party.members[gi]
+                    if m.alive and m.hp > 0 and m.cls == 'Rogue':
+                        return True
+        except Exception:
+            pass
+        return False
 
     def draw_threat_indicator(self):
         # Simple vertical bar at top-right showing threat from green->yellow->orange->red
@@ -3383,8 +3435,64 @@ class Game:
         self.r.text(view, item, (x + pad_x, y + pad_y + text_h + 6))
         self.r.text_small(view, "Enter/Esc: Close", (x + pad_x, y + pad_y + text_h * 2 + 10), LIGHT)
 
+    def draw_door_confirm(self):
+        if not getattr(self, 'door_confirm_active', False):
+            return
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
+        view.blit(overlay, (0, 0))
+        # Centered confirm box
+        msg = "Use a Key to unlock?"
+        text_h = self.r.font.get_height()
+        pad_x, pad_y = 14, 12
+        w = max(self.r.font.size(msg)[0], self.r.font.size("Yes")[0] + self.r.font.size("No")[0] + 40) + pad_x * 2
+        h = text_h * 3 + pad_y * 2
+        x = WIDTH // 2 - w // 2
+        y = VIEW_H // 2 - h // 2
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(view, (20, 20, 26), rect)
+        pygame.draw.rect(view, YELLOW, rect, 2)
+        self.r.text(view, msg, (x + pad_x, y + pad_y))
+        # Yes/No menu
+        opts = ["Yes", "No"]
+        self.r.draw_center_menu(opts, self.door_confirm_index)
+
     def maze_input(self, event):
         if event.type == pygame.KEYDOWN:
+            # Door confirm
+            if getattr(self, 'door_confirm_active', False):
+                if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
+                    self.door_confirm_index = 1 - self.door_confirm_index
+                    return
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.door_confirm_index == 0 and self.door_confirm_pos:
+                        # consume a key and unlock
+                        try:
+                            self.party.inventory.remove('key')
+                        except ValueError:
+                            pass
+                        x, y = self.door_confirm_pos
+                        if self.in_bounds(x, y):
+                            self.grid()[y][x] = T_EMPTY
+                        # attempt to move into it immediately
+                        dx, dy = DIRS[self.facing]
+                        if (self.pos[0] + dx, self.pos[1] + dy) == (x, y):
+                            if not self.move_active:
+                                self.move_active = True
+                                self.move_from = self.pos
+                                self.move_to = (x, y)
+                                self.move_t0 = pygame.time.get_ticks()
+                                self.move_step_sfx_count = 0
+                        self.log.add("You unlock the door with a key.")
+                    # close popup regardless
+                    self.door_confirm_active = False
+                    self.door_confirm_pos = None
+                    return
+                elif event.key == pygame.K_ESCAPE:
+                    self.door_confirm_active = False
+                    self.door_confirm_pos = None
+                    return
             # Close treasure popup if showing
             if getattr(self, 'treasure_popup_active', False):
                 if event.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_SPACE):
