@@ -44,6 +44,12 @@
     "price": 20
   },
   {
+    "id": "key",
+    "name": "Key",
+    "type": "key",
+    "price": 20
+  },
+  {
     "id": "helm",
     "name": "Helm",
     "type": "accessory",

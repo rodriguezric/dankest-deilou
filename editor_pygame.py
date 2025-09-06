@@ -6,8 +6,8 @@ from typing import List, Dict, Any, Optional, Tuple
 import pygame
 
 # Tile constants (match main.py)
-T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U = 0, 1, 2, 3, 4
-TOOL_CHEST = 5  # editor-only tool id
+T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U, T_LOCKED = 0, 1, 2, 3, 4, 5
+TOOL_CHEST = 6  # editor-only tool id for chests
 
 DATA_DIR = 'data'
 LEVEL_DIR = os.path.join(DATA_DIR, 'levels')
@@ -247,6 +247,17 @@ class Editor:
                 elif t == T_STAIRS_U:
                     pygame.draw.rect(self.screen, (30,30,34), r)
                     pygame.draw.polygon(self.screen, GREEN, [(r.left+3, r.bottom-3), (r.right-3, r.bottom-3), (r.centerx, r.top+3)])
+                elif t == T_LOCKED:
+                    pygame.draw.rect(self.screen, (30,30,34), r)
+                    # draw door bar
+                    bar = r.inflate(-2, -TILE//2)
+                    bar.centery = r.centery
+                    pygame.draw.rect(self.screen, (36, 28, 22), bar)
+                    pygame.draw.rect(self.screen, (120, 100, 60), bar, 1)
+                    # small lock
+                    lock = pygame.Rect(0,0, 8,8)
+                    lock.center = (r.centerx, r.centery)
+                    pygame.draw.rect(self.screen, (200,180,90), lock, 1)
         # Draw chests as overlays
         for c in self.doc.chests:
             x, y = int(c.get('x', -1)), int(c.get('y', -1))
@@ -279,7 +290,7 @@ class Editor:
         self.text_small('Generate', (px+8, py+4))
         py += 30
         self.text_small('S: Save   ,/.: Prev/Next level', (px, py)); py += 18
-        self.text_small('0..5: Select tool   R: Reset', (px, py)); py += 18
+        self.text_small('0..6: Select tool   R: Reset', (px, py)); py += 18
         self.text_small('Right-click stairs-down: link', (px, py)); py += 18
         py += 6
         tools = [
@@ -288,6 +299,7 @@ class Editor:
             (T_TOWN, 'Town (L0)'),
             (T_STAIRS_D, 'Stairs Down'),
             (T_STAIRS_U, 'Stairs Up'),
+            (T_LOCKED, 'Locked Door'),
             (TOOL_CHEST, 'Chest'),
         ]
         self.tool_rects = []
@@ -761,7 +773,7 @@ class Editor:
                         self.doc = LevelDoc(max(0, self.doc.index - 1))
                     elif event.key in (pygame.K_PERIOD,):
                         self.doc = LevelDoc(self.doc.index + 1)
-                    elif pygame.K_0 <= event.key <= pygame.K_5:
+                    elif pygame.K_0 <= event.key <= pygame.K_6:
                         self.tool = event.key - pygame.K_0
 
             self.draw()
