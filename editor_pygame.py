@@ -7,6 +7,7 @@ import pygame
 
 # Tile constants (match main.py)
 T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U = 0, 1, 2, 3, 4
+TOOL_CHEST = 5  # editor-only tool id
 
 DATA_DIR = 'data'
 LEVEL_DIR = os.path.join(DATA_DIR, 'levels')
@@ -56,6 +57,7 @@ class LevelDoc:
         self.stairs_up: Optional[Tuple[int, int]] = None
         self.town_portal: Optional[Tuple[int, int]] = (2, 2) if index == 0 else None
         self.encounters: Dict[str, Any] = {"monsters": [], "group": [1, 3]}
+        self.chests: List[Dict[str, Any]] = []
         self.size: Tuple[int, int] = (W, H)
         self.load()
 
@@ -90,6 +92,16 @@ class LevelDoc:
         self.stairs_up = tuple(su) if isinstance(su, list) and len(su)==2 else None
         self.town_portal = tuple(tp) if isinstance(tp, list) and len(tp)==2 else (self.town_portal if self.index==0 else None)
         self.encounters = self.data.get('encounters', self.encounters)
+        # Load chests
+        ch = self.data.get('chests', [])
+        if isinstance(ch, list):
+            self.chests = []
+            for c in ch:
+                try:
+                    x = int(c.get('x')); y = int(c.get('y')); iid = str(c.get('iid'))
+                    self.chests.append({'x': x, 'y': y, 'iid': iid})
+                except Exception:
+                    continue
 
         # ensure markers reflected in grid
         if self.town_portal:
@@ -105,6 +117,8 @@ class LevelDoc:
             'encounters': self.encounters,
             'size': [W, H],
         }
+        if self.chests:
+            d['chests'] = list(self.chests)
         if self.stairs_down: d['stairs_down'] = list(self.stairs_down)
         if self.stairs_up: d['stairs_up'] = list(self.stairs_up)
         if self.index == 0 and self.town_portal:
@@ -146,6 +160,8 @@ class Editor:
         self.gen_opt_rects: List[Tuple[pygame.Rect, str]] = []
         # Monsters list for encounters UI
         self.monsters: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'monsters.json'), [])
+        # Items list for chest assignment UI
+        self.items: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'items.json'), [])
 
     def grid_pos_from_mouse(self, mx, my):
         gx = (mx - MARGIN) // TILE
@@ -231,6 +247,15 @@ class Editor:
                 elif t == T_STAIRS_U:
                     pygame.draw.rect(self.screen, (30,30,34), r)
                     pygame.draw.polygon(self.screen, GREEN, [(r.left+3, r.bottom-3), (r.right-3, r.bottom-3), (r.centerx, r.top+3)])
+        # Draw chests as overlays
+        for c in self.doc.chests:
+            x, y = int(c.get('x', -1)), int(c.get('y', -1))
+            if 0 <= x < W and 0 <= y < H:
+                r = pygame.Rect(ox + x*TILE, oy + y*TILE, TILE-1, TILE-1)
+                cr = r.inflate(-8, -10)
+                cr.y = r.y + (TILE//2)
+                pygame.draw.rect(self.screen, (140, 100, 40), cr)
+                pygame.draw.rect(self.screen, (90, 70, 30), cr, 1)
         # Grid border
         pygame.draw.rect(self.screen, YELLOW, (ox-1, oy-1, grid_w+2, grid_h+2), 1)
 
@@ -254,7 +279,7 @@ class Editor:
         self.text_small('Generate', (px+8, py+4))
         py += 30
         self.text_small('S: Save   ,/.: Prev/Next level', (px, py)); py += 18
-        self.text_small('0..4: Select tool   R: Reset', (px, py)); py += 18
+        self.text_small('0..5: Select tool   R: Reset', (px, py)); py += 18
         self.text_small('Right-click stairs-down: link', (px, py)); py += 18
         py += 6
         tools = [
@@ -263,6 +288,7 @@ class Editor:
             (T_TOWN, 'Town (L0)'),
             (T_STAIRS_D, 'Stairs Down'),
             (T_STAIRS_U, 'Stairs Up'),
+            (TOOL_CHEST, 'Chest'),
         ]
         self.tool_rects = []
         for tid, label in tools:
@@ -299,8 +325,8 @@ class Editor:
             pygame.draw.rect(self.screen, YELLOW, rect, 2)
             self.text(self.input_prompt, (rx+16, ry+18))
             self.text(self.input_text + '_', (rx+16, ry+58), YELLOW)
-            # If in monster input mode, show suggestions below
-            if self.input_mode == 'monster' and self.input_suggestions:
+            # If in suggestion modes, show suggestions below
+            if self.input_mode in ('monster','item') and self.input_suggestions:
                 sy = ry + 84
                 self.suggestion_rects = []
                 for i, (_id, disp) in enumerate(self.input_suggestions[:6]):
@@ -508,6 +534,86 @@ class Editor:
             self.draw()
         return None
 
+    def read_item_id_input(self) -> Optional[str]:
+        # Prompt user to enter an item id with suggestions
+        self.input_active = True
+        self.input_prompt = 'Chest item id:'
+        self.input_text = ''
+        self.input_mode = 'item'
+        self.input_suggestions = []
+        self.suggestion_index = -1
+
+        def all_item_ids():
+            return [str(it.get('id')) for it in self.items if isinstance(it, dict) and it.get('id')]
+
+        def find_item_matches(prefix: str) -> List[Tuple[str, str]]:
+            ids = all_item_ids()
+            pref = prefix.lower()
+            matches = [i for i in ids if i.lower().startswith(pref)] if pref else ids
+            id_to_name = {it.get('id'): it.get('name') for it in self.items if isinstance(it, dict)}
+            return [(i, f"{i} - {id_to_name.get(i, '')}") for i in matches]
+
+        while self.input_active:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.input_mode == 'item' and self.input_suggestions and event.button == 1:
+                        mx, my = event.pos
+                        for idx, r in enumerate(self.suggestion_rects):
+                            if r.collidepoint(mx, my):
+                                sel_id = self.input_suggestions[idx][0]
+                                self.input_active = False
+                                self.input_mode = 'text'
+                                self.input_suggestions = []
+                                self.suggestion_index = -1
+                                return sel_id
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return None
+                    elif event.key == pygame.K_RETURN:
+                        text = self.input_text.strip()
+                        if self.input_suggestions and 0 <= self.suggestion_index < len(self.input_suggestions):
+                            text = self.input_suggestions[self.suggestion_index][0]
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return text if text else None
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                        if self.input_mode == 'item':
+                            self.input_suggestions = find_item_matches(self.input_text)
+                            self.suggestion_index = 0 if self.input_suggestions else -1
+                    elif event.key == pygame.K_TAB:
+                        matches = find_item_matches(self.input_text)
+                        if len(matches) == 1:
+                            self.input_text = matches[0][0]
+                            self.input_suggestions = []
+                            self.suggestion_index = -1
+                        elif len(matches) > 1:
+                            self.input_suggestions = matches
+                            self.suggestion_index = 0
+                    elif event.key in (pygame.K_UP, pygame.K_DOWN):
+                        if self.input_suggestions:
+                            if event.key == pygame.K_UP:
+                                self.suggestion_index = (self.suggestion_index - 1) % len(self.input_suggestions)
+                            else:
+                                self.suggestion_index = (self.suggestion_index + 1) % len(self.input_suggestions)
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            self.input_text += ch
+                            if self.input_mode == 'item':
+                                self.input_suggestions = find_item_matches(self.input_text)
+                                self.suggestion_index = 0 if self.input_suggestions else -1
+            self.draw()
+        return None
+
     def run(self):
         clock = pygame.time.Clock()
         while self.running:
@@ -618,12 +724,27 @@ class Editor:
                             if event.button == 1:
                                 if gp:
                                     x, y = gp
-                                    self.set_tile(x, y, self.tool)
+                                    if self.tool == TOOL_CHEST:
+                                        # toggle chest on left click
+                                        found = next((i for i,c in enumerate(self.doc.chests) if c.get('x')==x and c.get('y')==y), None)
+                                        if found is not None:
+                                            self.doc.chests.pop(found)
+                                        else:
+                                            self.doc.chests.append({'x': x, 'y': y, 'iid': 'potion_small'})
+                                    else:
+                                        self.set_tile(x, y, self.tool)
                             elif event.button == 3:
                                 if gp:
                                     x, y = gp
                                     if self.doc.grid[y][x] == T_STAIRS_D:
                                         self.handle_link_stairs_down(x, y)
+                                    else:
+                                        # Right-click a chest to set item id
+                                        idx = next((i for i,c in enumerate(self.doc.chests) if c.get('x')==x and c.get('y')==y), None)
+                                        if idx is not None:
+                                            iid = self.read_item_id_input()
+                                            if iid:
+                                                self.doc.chests[idx]['iid'] = iid
                 elif event.type == pygame.KEYDOWN and not self.input_active:
                     if event.key == pygame.K_s:
                         self.doc.save(); self.status = f'Saved level {self.doc.index}'
@@ -640,7 +761,7 @@ class Editor:
                         self.doc = LevelDoc(max(0, self.doc.index - 1))
                     elif event.key in (pygame.K_PERIOD,):
                         self.doc = LevelDoc(self.doc.index + 1)
-                    elif pygame.K_0 <= event.key <= pygame.K_4:
+                    elif pygame.K_0 <= event.key <= pygame.K_5:
                         self.tool = event.key - pygame.K_0
 
             self.draw()

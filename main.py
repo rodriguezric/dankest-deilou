@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Wizardry‑style dungeon RPG — single‑file Pygame prototype (Top‑down, 4‑party, Menus, Animations)
+Wizardry-style dungeon RPG — single-file Pygame prototype (Top-down, 4-party, Menus, Animations)
 
 Update summary
 - Centered menus now have **no headers** (cleaner look).
 - Tavern actions are **Create / Dismiss / Back** and the menu opens **automatically**.
 - **Back** in Tavern returns to **Town**.
 - **Dismiss** now lets you choose a character and confirms via a popup.
-- (Kept from prior) Target selection in battle, inter‑animation pauses, acting highlights, enemy windows, etc.
+- (Kept from prior) Target selection in battle, inter-animation pauses, acting highlights, enemy windows, etc.
 
 Controls
 - Menus: Arrow keys / Enter / Esc
@@ -88,11 +88,10 @@ ACTIVE_MAX = 4
 ROSTER_MAX = 10
 
 # ------------------------------ Data Models --------------------------------
-RACES = ["Human", "Elf", "Dwarf", "Gnome", "Halfling"]
-CLASSES = ["Fighter", "Mage", "Priest", "Thief"]
+CLASSES = ["Fighter", "Mage", "Priest", "Rogue"]
 
-BASE_HP = {"Fighter": 12, "Mage": 6, "Priest": 8, "Thief": 8}
-BASE_MP = {"Fighter": 0, "Mage": 8, "Priest": 6, "Thief": 0}
+BASE_HP = {"Fighter": 12, "Mage": 6, "Priest": 8, "Rogue": 8}
+BASE_MP = {"Fighter": 0, "Mage": 8, "Priest": 6, "Rogue": 0}
 AC_BASE = 10
 
 # Data resources are loaded from JSON (monsters, items, skills, levels)
@@ -101,7 +100,7 @@ SHOP_ITEMS: List[Dict[str, Any]] = []
 ITEMS_BY_ID: Dict[str, Dict[str, Any]] = {}
 
 # Recruiting costs per class (party pays on creation)
-CLASS_COSTS = {"Thief": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
+CLASS_COSTS = {"Rogue": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
 
 DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 DIR_NAMES = ["N", "E", "S", "W"]
@@ -288,7 +287,6 @@ class Equipment:
 @dataclass
 class Character:
     name: str
-    race: str
     cls: str
     level: int = 1
     str_: int = field(default_factory=roll_stat)
@@ -344,10 +342,17 @@ class Character:
 
     @staticmethod
     def from_dict(d):
-        c = Character(d["name"], d["race"], d["cls"])
+        # Map legacy class names (e.g., Thief -> Rogue) for backward compatibility
+        cls_name = d.get("cls", "Fighter")
+        if cls_name == "Thief":
+            cls_name = "Rogue"
+        c = Character(d["name"], cls_name)
         for k, v in d.items():
             if k == "equipment":
                 c.equipment = Equipment(**v)
+            elif k == "cls":
+                # Normalize legacy class names
+                c.cls = "Rogue" if str(v) == "Thief" else str(v)
             elif hasattr(c, k):
                 setattr(c, k, v)
         return c
@@ -459,6 +464,8 @@ class Level:
     # Encounter config loaded from JSON
     encounter_monsters: List[str] = field(default_factory=list)
     encounter_group: Tuple[int, int] = (1, 3)
+    # Treasure chests on this level: list of {'x':int,'y':int,'iid':str}
+    chests: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class Dungeon:
@@ -507,6 +514,19 @@ class Dungeon:
                 lvl.encounter_monsters = mons if isinstance(mons, list) else []
                 if isinstance(grp, list) and len(grp) == 2:
                     lvl.encounter_group = (int(grp[0]), int(grp[1]))
+                # Chests
+                chests = data.get('chests', [])
+                if isinstance(chests, list):
+                    clean = []
+                    for c in chests:
+                        try:
+                            x = int(c.get('x'))
+                            y = int(c.get('y'))
+                            iid = str(c.get('iid'))
+                            clean.append({'x': x, 'y': y, 'iid': iid})
+                        except Exception:
+                            continue
+                    lvl.chests = clean
         except Exception:
             pass
         if ix == 0 and not lvl.town_portal:
@@ -604,7 +624,8 @@ class Renderer:
     def draw_topdown(self, grid, pos: Tuple[int, int], facing: int, level_ix: int,
                      world_shift_tiles: Tuple[float, float] = (0.0, 0.0), player_bob_px: int = 0,
                      player_frac: Tuple[float, float] = (0.0, 0.0),
-                     visible_tiles: set = None, seen_tiles: set = None, apply_fov: bool = False):
+                     visible_tiles: set = None, seen_tiles: set = None, apply_fov: bool = False,
+                     chests: List[Dict[str, Any]] = None):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 22))
         px, py = pos
@@ -635,6 +656,16 @@ class Renderer:
                             pygame.draw.polygon(view, YELLOW, [(sx + cell // 5, sy + cell // 5), (sx + cell - cell // 5, sy + cell // 5), (sx + cell // 2, sy + cell - cell // 5)])
                         elif t == T_STAIRS_U:
                             pygame.draw.polygon(view, GREEN, [(sx + cell // 5, sy + cell - cell // 5), (sx + cell - cell // 5, sy + cell - cell // 5), (sx + cell // 2, sy + cell // 5)])
+        # Draw chests on top of floor tiles (simple icon), within the radius window
+        if chests:
+            for c in chests:
+                cx, cy = int(c.get('x', -9999)), int(c.get('y', -9999))
+                if py - radius <= cy <= py + radius and px - radius <= cx <= px + radius:
+                    sx = ox + (cx - (px - radius)) * cell + int(shift_px[0])
+                    sy = oy + (cy - (py - radius)) * cell + int(shift_px[1])
+                    rect = pygame.Rect(sx + cell//4, sy + cell//3, cell//2, cell//3)
+                    pygame.draw.rect(view, (120, 90, 40), rect)
+                    pygame.draw.rect(view, (80, 60, 30), rect, 2)
         # player marker
         pxs = ox + radius * cell + cell // 2
         pys = oy + radius * cell + cell // 2 + int(player_bob_px)
@@ -1870,7 +1901,7 @@ class Game:
         self.combat_intro_done_triggered: bool = False
 
         self.menu_index = 0
-        self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
+        self.create_state = {"step": 0, "name": "", "class_ix": 0}
         self.create_confirm_index = 0
         # Shop UI state
         self.shop_phase = 'menu'  # 'menu' | 'buy_items' | 'sell_items' | 'buy_confirm' | 'sell_confirm'
@@ -1934,8 +1965,6 @@ class Game:
         self.threat_full_steps: int = 0  # steps taken while meter is full
         self.threat_flash_active: bool = False
         self.threat_flash_t0: int = 0
-        # Fog of war: per-level memory of seen tiles
-        self.seen_by_level: Dict[int, set] = {}
         # Victory screen info
         self.victory_info: Dict[str, Any] = {}
         # Victory typewriter
@@ -1967,6 +1996,21 @@ class Game:
         self.load_feedback_active: bool = False
         self.load_feedback_stage: int = 0  # 0 fade-out, 1 fade-in
         self.load_feedback_t0: int = 0
+
+        # Persistent state: fog-of-war and level chests
+        self.seen_by_level: Dict[int, set] = {}
+        self.chests_state: Dict[int, List[Dict[str, Any]]] = {}
+
+        # Treasure popup
+        self.treasure_popup_active: bool = False
+        self.treasure_item_name: str = ''
+        self.treasure_t0: int = 0
+
+        # Apply any saved per-level state to the initially loaded level
+        try:
+            self.apply_level_state(self.level_ix)
+        except Exception:
+            pass
 
 
     def load_json(self, path: str, default):
@@ -2160,11 +2204,16 @@ class Game:
 
     # --------------- Save/Load ---------------
     def save(self, path="save.json"):
+        # Serialize seen tiles per level and remaining chests per level
+        seen_ser = {str(k): [[int(x), int(y)] for (x, y) in sorted(v)] for k, v in self.seen_by_level.items()}
+        chests_ser = {str(k): list(v) for k, v in self.chests_state.items()}
         data = {
             "party": self.party.to_dict(),
             "pos": self.pos,
             "facing": self.facing,
             "level": self.level_ix,
+            "seen": seen_ser,
+            "chests": chests_ser,
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -2181,6 +2230,37 @@ class Game:
         self.party = Party.from_dict(data.get("party", {}))
         self.level_ix = int(data.get("level", 0))
         self.dun.ensure_level(self.level_ix)
+        # Restore fog-of-war and chests state
+        self.seen_by_level = {}
+        try:
+            seen = data.get("seen", {})
+            if isinstance(seen, dict):
+                for k, v in seen.items():
+                    try:
+                        ix = int(k)
+                        st = set()
+                        for pair in v:
+                            x, y = int(pair[0]), int(pair[1])
+                            st.add((x, y))
+                        self.seen_by_level[ix] = st
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        self.chests_state = {}
+        try:
+            ch = data.get("chests", {})
+            if isinstance(ch, dict):
+                for k, v in ch.items():
+                    try:
+                        ix = int(k)
+                        if isinstance(v, list):
+                            self.chests_state[ix] = list(v)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        self.apply_level_state(self.level_ix)
         self.pos = tuple(data.get("pos", (2, 2)))
         self.facing = int(data.get("facing", 1))
         self.log.add("Game loaded.")
@@ -2426,7 +2506,7 @@ class Game:
                             self.log.add("Roster is full.")
                         else:
                             self.mode = MODE_CREATE
-                            self.create_state = {"step": 0, "name": "", "race_ix": 0, "class_ix": 0}
+                            self.create_state = {"step": 0, "name": "", "class_ix": 0}
                     elif choice == 1:  # Dismiss
                         if not self.party.members:
                             self.log.add("No one to dismiss.")
@@ -2595,11 +2675,6 @@ class Game:
             self.r.text(view, s["name"] + "_", (260, y), YELLOW)
             self.r.text_small(view, "Enter to confirm", (32, y + 28), LIGHT)
         elif s["step"] == 1:
-            # Race list menu
-            self.r.text(view, "Choose Race (Enter)", (32, y))
-            self.r.draw_center_menu(RACES, s["race_ix"])
-            self.r.text_small(view, "↑/↓ to move, Enter to confirm", (32, VIEW_H - 28), LIGHT)
-        elif s["step"] == 2:
             # Class list with prices
             self.r.text(view, "Choose Class (Enter)", (32, y))
             class_opts = [f"{c} — {CLASS_COSTS.get(c,0)}g" for c in CLASSES]
@@ -2609,10 +2684,10 @@ class Game:
             cost = CLASS_COSTS.get(chosen, 0)
             col = YELLOW if self.party.gold >= cost else RED
             self.r.text_small(view, f"Gold: {self.party.gold}g  Selected cost: {cost}g", (32, VIEW_H - 28), col)
-        elif s["step"] == 3:
-            temp = Character(s["name"], RACES[s["race_ix"]], CLASSES[s["class_ix"]])
+        elif s["step"] == 2:
+            temp = Character(s["name"], CLASSES[s["class_ix"]])
             self.r.text(view, f"Name: {temp.name}", (32, y))
-            self.r.text(view, f"Race: {temp.race}  Class: {temp.cls}", (32, y + 20))
+            self.r.text(view, f"Class: {temp.cls}", (32, y + 20))
             y2 = y + 44
             stats = [("STR", temp.str_), ("IQ", temp.iq), ("PIE", temp.piety), ("VIT", temp.vit), ("AGI", temp.agi), ("LCK", temp.luck)]
             for i, (k, v) in enumerate(stats):
@@ -2630,6 +2705,12 @@ class Game:
                 if event.key == pygame.K_RETURN:
                     if s["name"].strip():
                         s["step"] = 1
+                elif event.key == pygame.K_ESCAPE:
+                    # Cancel character creation and return to Party menu
+                    self.create_state = {"step": 0, "name": "", "class_ix": 0}
+                    self.mode = MODE_PARTY
+                    self.party_mode = 'menu'
+                    self.party_actions_index = 0
                 elif event.key == pygame.K_BACKSPACE:
                     s["name"] = s["name"][:-1]
                 else:
@@ -2638,23 +2719,14 @@ class Game:
                         s["name"] += ch
             elif s["step"] == 1:
                 if event.key in (pygame.K_UP, pygame.K_k):
-                    s["race_ix"] = (s["race_ix"] - 1) % len(RACES)
+                    s["class_ix"] = (s["class_ix"] - 1) % len(CLASSES)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    s["race_ix"] = (s["race_ix"] + 1) % len(RACES)
+                    s["class_ix"] = (s["class_ix"] + 1) % len(CLASSES)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     s["step"] = 2
                 elif event.key == pygame.K_ESCAPE:
                     s["step"] = 0
             elif s["step"] == 2:
-                if event.key in (pygame.K_UP, pygame.K_k):
-                    s["class_ix"] = (s["class_ix"] - 1) % len(CLASSES)
-                elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    s["class_ix"] = (s["class_ix"] + 1) % len(CLASSES)
-                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    s["step"] = 3
-                elif event.key == pygame.K_ESCAPE:
-                    s["step"] = 1
-            elif s["step"] == 3:
                 if event.key in (pygame.K_UP, pygame.K_k):
                     self.create_confirm_index = (self.create_confirm_index - 1) % 3
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
@@ -2671,22 +2743,21 @@ class Game:
                                 self.log.add(f"Not enough gold to recruit a {cls}.")
                             else:
                                 self.party.gold -= cost
-                                newc = Character(s["name"], RACES[s["race_ix"]], cls)
+                                newc = Character(s["name"], cls)
                                 self.party.members.append(newc)
                                 self.log.add(f"{newc.name} the {newc.cls} joins the roster (-{cost}g).")
                         self.mode = MODE_PARTY
                         self.party_mode = 'menu'
                         self.party_actions_index = 0
                     elif choice == 1:  # Reroll
-                        s["step"] = 2; s["step"] = 3
+                        s["step"] = 1; s["step"] = 2
                     else:  # Cancel
                         self.mode = MODE_PARTY
                         self.party_mode = 'menu'
                         self.party_actions_index = 0
                 elif event.key == pygame.K_ESCAPE:
-                    self.mode = MODE_PARTY
-                    self.party_mode = 'menu'
-                    self.party_actions_index = 0
+                    # back to class select
+                    s["step"] = 1
 
     # --------------- Shop / Temple / Training ---------------
     def draw_shop(self):
@@ -3111,6 +3182,7 @@ class Game:
         down_pos = cur.stairs_down or self.pos
         self.level_ix += 1
         self.dun.ensure_level(self.level_ix, arrival_pos=down_pos)
+        self.apply_level_state(self.level_ix)
         self.pos = down_pos
         self.facing = 1
         self.mode = MODE_MAZE
@@ -3123,6 +3195,7 @@ class Game:
         prev_level = self.level_ix - 1
         self.level_ix = prev_level
         self.dun.ensure_level(self.level_ix)
+        self.apply_level_state(self.level_ix)
         target = self.dun.levels[self.level_ix].stairs_down or (2, 2)
         self.pos = target
         self.facing = 1
@@ -3167,14 +3240,17 @@ class Game:
         for t in visible_tiles:
             seen.add(t)
         # Draw with fog-of-war overlay (pass both visible and seen)
+        lvl = self.dun.levels[self.level_ix]
         self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix, shift_tiles, bob_px, frac,
-                            visible_tiles=visible_tiles, seen_tiles=seen, apply_fov=False)
+                            visible_tiles=visible_tiles, seen_tiles=seen, apply_fov=False,
+                            chests=getattr(lvl, 'chests', []))
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Removed on-screen controls display for a cleaner labyrinth view
         # Draw threat flash (when meter is full) and indicator (top-right)
         try:
             self.draw_threat_flash()
             self.draw_threat_indicator()
+            self.draw_treasure_popup()
         except Exception:
             pass
         # During combat intro flashes, overlay on maze
@@ -3221,6 +3297,16 @@ class Game:
                 for tx in range(px - radius, px + radius + 1):
                     visible.add((tx, ty))
         return visible
+
+    def apply_level_state(self, ix: int):
+        # Synchronize runtime level chests with saved state for this level, if present
+        try:
+            lvl = self.dun.levels[ix]
+        except Exception:
+            return
+        saved = self.chests_state.get(ix)
+        if isinstance(saved, list):
+            lvl.chests = list(saved)
 
     def draw_threat_indicator(self):
         # Simple vertical bar at top-right showing threat from green->yellow->orange->red
@@ -3273,8 +3359,37 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.blit(overlay, (0, 0))
 
+    def draw_treasure_popup(self):
+        if not getattr(self, 'treasure_popup_active', False):
+            return
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        # Dim background
+        s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        s.fill((0, 0, 0, 160))
+        view.blit(s, (0, 0))
+        # Popup window
+        pad_x, pad_y = 14, 12
+        title = "Treasure Found!"
+        item = self.treasure_item_name or "(item)"
+        text_h = self.r.font.get_height()
+        w = max(self.r.font_big.size(title)[0], self.r.font.size(item)[0]) + pad_x * 2
+        h = text_h * 3 + pad_y * 2
+        x = WIDTH // 2 - w // 2
+        y = VIEW_H // 2 - h // 2
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(view, (16, 20, 16), rect)
+        pygame.draw.rect(view, YELLOW, rect, 2)
+        self.r.text_big(view, title, (x + pad_x, y + pad_y), YELLOW)
+        self.r.text(view, item, (x + pad_x, y + pad_y + text_h + 6))
+        self.r.text_small(view, "Enter/Esc: Close", (x + pad_x, y + pad_y + text_h * 2 + 10), LIGHT)
+
     def maze_input(self, event):
         if event.type == pygame.KEYDOWN:
+            # Close treasure popup if showing
+            if getattr(self, 'treasure_popup_active', False):
+                if event.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_SPACE):
+                    self.treasure_popup_active = False
+                    return
             if self.move_active:
                 # ignore movement/turn keys during step animation
                 return
@@ -4262,6 +4377,28 @@ class Game:
                 t = self.grid()[y][x]
                 special = t in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
                 self.check_special_tile()
+                # Treasure chest pickup (step onto a chest tile)
+                try:
+                    lvl = self.dun.levels[self.level_ix]
+                    if hasattr(lvl, 'chests') and isinstance(lvl.chests, list):
+                        cx, cy = self.pos
+                        idx = None
+                        for i, c in enumerate(lvl.chests):
+                            if int(c.get('x', -1)) == cx and int(c.get('y', -1)) == cy:
+                                idx = i; break
+                        if idx is not None:
+                            chest = lvl.chests.pop(idx)
+                            iid = str(chest.get('iid'))
+                            it = ITEMS_BY_ID.get(iid, {'name': iid})
+                            self.party.inventory.append(iid)
+                            # Persist remaining chests for this level
+                            self.chests_state[self.level_ix] = list(lvl.chests)
+                            # Popup
+                            self.treasure_item_name = it.get('name', iid)
+                            self.treasure_popup_active = True
+                            self.treasure_t0 = pygame.time.get_ticks()
+                except Exception:
+                    pass
                 # Threat mechanic: increase per step, only trigger after staying full for at least one extra step
                 if self.mode == MODE_MAZE and not special:
                     try:

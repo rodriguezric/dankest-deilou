@@ -640,6 +640,13 @@
     24,
     24
   ],
+  "chests": [
+    {
+      "x": 18,
+      "y": 4,
+      "iid": "sword_basic"
+    }
+  ],
   "stairs_down": [
     18,
     15
