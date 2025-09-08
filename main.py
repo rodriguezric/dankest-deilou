@@ -2207,7 +2207,7 @@ class Battle:
 class Game:
     def __init__(self):
         pygame.init()
-        pygame.display.set_caption("Dankest Deilou")
+        pygame.display.set_caption("Deilou")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.r = Renderer(self.screen)
@@ -2658,7 +2658,7 @@ class Game:
                 pygame.draw.aalines(overlay, col, False, pts)
         screen.blit(overlay, (0, 0))
 
-        title = "Dankest Deilou"
+        title = "Deilou"
         options = ["New Game", "Load", "Exit"]
 
         # Compute menu height to position title above it while keeping composition centered
