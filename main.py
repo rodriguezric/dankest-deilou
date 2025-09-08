@@ -2207,7 +2207,7 @@ class Battle:
 class Game:
     def __init__(self):
         pygame.init()
-        pygame.display.set_caption("Deilou")
+        pygame.display.set_caption("DEILOU")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.r = Renderer(self.screen)
@@ -2658,7 +2658,7 @@ class Game:
                 pygame.draw.aalines(overlay, col, False, pts)
         screen.blit(overlay, (0, 0))
 
-        title = "Deilou"
+        title = "DEILOU"
         options = ["New Game", "Load", "Exit"]
 
         # Compute menu height to position title above it while keeping composition centered
@@ -3003,6 +3003,32 @@ class Game:
             self.r.text(view, f"AC:  {m.defense_ac:+}", (right_x, right_y)); right_y += 20
             self.r.text(view, f"Weapon ATK: +{m.equipment.weapon_atk}", (right_x, right_y)); right_y += 20
             self.r.text(view, f"Armor AC:  {m.equipment.armor_ac:+}", (right_x, right_y)); right_y += 20
+
+            # Status effects section
+            right_y += 8
+            self.r.text(view, "Status Effects:", (right_x, right_y)); right_y += 20
+            # Build stacks in the same order and style as battle windows
+            order = ['bleed', 'poison', 'regen', 'blind', 'vulnerable', 'weak', 'stun']
+            stacks = []
+            for key in order:
+                try:
+                    cnt = int(getattr(m, 'statuses', {}).get(key, 0))
+                except Exception:
+                    cnt = 0
+                if cnt > 0:
+                    cnt = min(9, cnt)
+                    color = self.r.status_colors.get(key, WHITE)
+                    stacks.append((str(cnt), color))
+            if stacks:
+                sx = right_x
+                by = right_y
+                for txt, col in stacks:
+                    surf = self.r.font_small.render(txt, True, col)
+                    view.blit(surf, (sx, by))
+                    sx += surf.get_width() + 10
+                right_y = by + self.r.font_small.get_height() + 4
+            else:
+                self.r.text_small(view, "<None>", (right_x, right_y), LIGHT); right_y += 18
 
             # Hint: how to go back
             self.r.text_small(view, "Enter/Esc: Back", (20, VIEW_H - 28), LIGHT)
