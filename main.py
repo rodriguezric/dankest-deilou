@@ -595,6 +595,16 @@ class Renderer:
         self.font = self._load_font(16)
         self.font_small = self._load_font(12)
         self.font_big = self._load_font(20)
+        # Status color mapping for stack displays
+        self.status_colors: Dict[str, Tuple[int, int, int]] = {
+            'bleed': RED,
+            'poison': GREEN,
+            'regen': YELLOW,
+            'blind': GRAY,
+            'vulnerable': (240, 140, 60),  # orange
+            'weak': BLUE,
+            'stun': PURPLE,
+        }
 
     def _load_font(self, size: int) -> pygame.font.Font:
         try:
@@ -965,6 +975,24 @@ class Renderer:
             self.text(view, name, (rx + 8, ry + 6), border_col)
             self.text_small(view, f"HP {m.hp}/{m.max_hp}", (rx + 8, ry + 26), WHITE)
             self.text_small(view, f"MP {m.mp}/{m.max_mp}", (rx + w // 2 + 8, ry + 26), WHITE)
+            # Status stacks at bottom
+            stacks: List[Tuple[str, Tuple[int, int, int]]] = []
+            order = ['bleed', 'poison', 'regen', 'blind', 'vulnerable', 'weak', 'stun']
+            for key in order:
+                try:
+                    cnt = int(getattr(m, 'statuses', {}).get(key, 0))
+                except Exception:
+                    cnt = 0
+                if cnt > 0:
+                    cnt = min(9, cnt)
+                    stacks.append((str(cnt), self.status_colors.get(key, WHITE)))
+            if stacks:
+                sx = rx + 8
+                by = ry + h - self.font_small.get_height() - 4
+                for i, (txt, col) in enumerate(stacks):
+                    surf = self.font_small.render(txt, True, col)
+                    view.blit(surf, (sx, by))
+                    sx += surf.get_width() + 6
             rects[gi] = rect
         return rects
 
@@ -1036,6 +1064,24 @@ class Renderer:
                 name = e.name[:14]
                 self.text(view, name, (rx + 8, ry + 6), border_col)
                 self.text_small(view, f"HP {max(0,e.hp):>2}", (rx + 8, ry + 26), WHITE)
+                # Status stacks at bottom
+                stacks: List[Tuple[str, Tuple[int, int, int]]] = []
+                order = ['bleed', 'poison', 'regen', 'blind', 'vulnerable', 'weak', 'stun']
+                for key in order:
+                    try:
+                        cnt = int(getattr(e, 'statuses', {}).get(key, 0))
+                    except Exception:
+                        cnt = 0
+                    if cnt > 0:
+                        cnt = min(9, cnt)
+                        stacks.append((str(cnt), self.status_colors.get(key, WHITE)))
+                if stacks:
+                    sx = rx + 8
+                    by = ry + h - self.font_small.get_height() - 4
+                    for i, (txt, col) in enumerate(stacks):
+                        surf = self.font_small.render(txt, True, col)
+                        view.blit(surf, (sx, by))
+                        sx += surf.get_width() + 6
             rects[i] = rect
         return rects
 
@@ -1166,7 +1212,7 @@ class Battle:
         if stacks <= 0:
             return
         old = self._status_get(side, ix, name)
-        new = old + int(stacks)
+        new = min(9, old + int(stacks))
         if side == 'party' and 0 <= ix < len(self.party.members):
             self.party.members[ix].statuses[name] = new
         elif side == 'enemy' and 0 <= ix < len(self.enemies):
@@ -1181,12 +1227,12 @@ class Battle:
         prev = self._status_get(side, ix, name)
         if side == 'party' and 0 <= ix < len(self.party.members):
             if stacks > 0:
-                self.party.members[ix].statuses[name] = int(stacks)
+                self.party.members[ix].statuses[name] = min(9, int(stacks))
             else:
                 self.party.members[ix].statuses.pop(name, None)
         elif side == 'enemy' and 0 <= ix < len(self.enemies):
             if stacks > 0:
-                self.enemies[ix].statuses[name] = int(stacks)
+                self.enemies[ix].statuses[name] = min(9, int(stacks))
             else:
                 self.enemies[ix].statuses.pop(name, None)
         # Log on expiry
