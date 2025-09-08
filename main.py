@@ -306,6 +306,7 @@ class Character:
     alive: bool = True
     equipment: Equipment = field(default_factory=Equipment)
     inventory: List[str] = field(default_factory=list)
+    statuses: Dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self):
         base_hp = BASE_HP[self.cls]
@@ -418,6 +419,7 @@ class Enemy:
     gold_high: int
     agi: int = 8
     drops: List[Dict[str, Any]] = field(default_factory=list)
+    statuses: Dict[str, int] = field(default_factory=dict)
 
     @staticmethod
     def from_base(base: Dict[str, Any]):
@@ -1143,12 +1145,111 @@ class Battle:
         self.dying_enemies: Dict[int, Dict[str, int]] = {}  # i -> {'start':ms,'dur':ms}
         self.downed_party: Dict[int, Dict[str, int]] = {}   # gi -> {'start':ms,'dur':ms}
 
+        # Party defend state (indices of global party members defending until their next turn)
+        self.party_defending: set = set()
         # Enemy AI state flags
-        self.slime_pulsed: Dict[int, bool] = {}  # enemy index -> True if next action must Splash
-        self.goblin_stolen: Dict[int, Optional[str]] = {}    # enemy index -> iid stolen
-        self.goblin_steal_used: Dict[int, bool] = {}         # enemy index -> attempted steal already
-        self.escaped_enemies: set = set()                    # indexes that fled (no rewards)
-        self.enemy_spin: Dict[int, Dict[str, int]] = {}      # enemy index -> {'start':ms,'dur':ms}
+        self.slime_pulsed: Dict[int, bool] = {}
+        self.goblin_stolen: Dict[int, Optional[str]] = {}
+        self.goblin_steal_used: Dict[int, bool] = {}
+        self.escaped_enemies: set = set()
+        self.enemy_spin: Dict[int, Dict[str, int]] = {}
+
+    # ----- Status helpers -----
+    def _status_get(self, side: str, ix: int, name: str) -> int:
+        if side == 'party' and 0 <= ix < len(self.party.members):
+            return int(self.party.members[ix].statuses.get(name, 0))
+        if side == 'enemy' and 0 <= ix < len(self.enemies):
+            return int(self.enemies[ix].statuses.get(name, 0))
+        return 0
+
+    def _status_add(self, side: str, ix: int, name: str, stacks: int):
+        if stacks <= 0:
+            return
+        old = self._status_get(side, ix, name)
+        new = old + int(stacks)
+        if side == 'party' and 0 <= ix < len(self.party.members):
+            self.party.members[ix].statuses[name] = new
+        elif side == 'enemy' and 0 <= ix < len(self.enemies):
+            self.enemies[ix].statuses[name] = new
+        # Log on first application
+        if old == 0 and new > 0:
+            who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
+            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak'}.get(name, name.title())
+            self.log.add(f"{who} gains {label} ({new}).")
+
+    def _status_set(self, side: str, ix: int, name: str, stacks: int):
+        prev = self._status_get(side, ix, name)
+        if side == 'party' and 0 <= ix < len(self.party.members):
+            if stacks > 0:
+                self.party.members[ix].statuses[name] = int(stacks)
+            else:
+                self.party.members[ix].statuses.pop(name, None)
+        elif side == 'enemy' and 0 <= ix < len(self.enemies):
+            if stacks > 0:
+                self.enemies[ix].statuses[name] = int(stacks)
+            else:
+                self.enemies[ix].statuses.pop(name, None)
+        # Log on expiry
+        if prev > 0 and stacks <= 0:
+            who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
+            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak'}.get(name, name.title())
+            self.log.add(f"{label} on {who} expires.")
+
+    def _status_dec(self, side: str, ix: int, name: str, amt: int = 1):
+        cur = self._status_get(side, ix, name)
+        cur = max(0, cur - amt)
+        self._status_set(side, ix, name, cur)
+
+    def _start_of_turn_effects(self, side: str, ix: int) -> bool:
+        """Apply start-of-turn effects. Return True if the turn should be skipped (stun)."""
+        # Stun: skip turn and remove
+        if self._status_get(side, ix, 'stun') > 0:
+            self._status_set(side, ix, 'stun', 0)
+            name = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
+            self.log.add(f"{name} is stunned and loses a turn!")
+            return True
+        # Poison: X damage then reduce stack by 1
+        p = self._status_get(side, ix, 'poison')
+        if p > 0:
+            if side == 'party' and 0 <= ix < len(self.party.members):
+                t = self.party.members[ix]
+                t.hp = max(0, t.hp - p)
+                self.add_floater('party', ix, str(p), 700, WHITE)
+            elif side == 'enemy' and 0 <= ix < len(self.enemies):
+                e = self.enemies[ix]
+                e.hp = max(0, e.hp - p)
+                self.add_floater('enemy', ix, str(p), 700, WHITE)
+            self._status_dec(side, ix, 'poison', 1)
+        # Bleed: 1 damage
+        if self._status_get(side, ix, 'bleed') > 0:
+            if side == 'party':
+                t = self.party.members[ix]
+                t.hp = max(0, t.hp - 1)
+                self.add_floater('party', ix, '1', 700, WHITE)
+            else:
+                e = self.enemies[ix]
+                e.hp = max(0, e.hp - 1)
+                self.add_floater('enemy', ix, '1', 700, WHITE)
+        # Regen: heal X and reduce
+        r = self._status_get(side, ix, 'regen')
+        if r > 0:
+            if side == 'party':
+                t = self.party.members[ix]
+                before = t.hp
+                t.hp = min(t.max_hp, t.hp + r)
+                self.add_floater('party', ix, str(t.hp - before), 700, YELLOW)
+            else:
+                e = self.enemies[ix]
+                # assume no max hp known; clamp to current hp + r
+                e.hp = max(0, e.hp + r)
+                self.add_floater('enemy', ix, str(r), 700, YELLOW)
+            self._status_dec(side, ix, 'regen', 1)
+        # Vulnerable/Weak decay each turn by 1
+        if self._status_get(side, ix, 'vulnerable') > 0:
+            self._status_dec(side, ix, 'vulnerable', 1)
+        if self._status_get(side, ix, 'weak') > 0:
+            self._status_dec(side, ix, 'weak', 1)
+        return False
 
     def start_random(self, allowed: Optional[List[str]] = None, group: Tuple[int, int] = (1, 3)):
         # Build enemy group from allowed ids and monster base data
@@ -1211,14 +1312,39 @@ class Battle:
                 # if no current actor, advance turn
                 self.advance_turn()
                 return
+            # Start-of-turn status for party actor
+            skip = self._start_of_turn_effects('party', self.current_actor_global_ix())
+            if skip:
+                self.advance_turn()
+                return
+            # Expire defend status for this actor at the start of their turn
+            cur_ix = self.current_actor_global_ix()
+            if cur_ix is not None and hasattr(self, 'party_defending') and cur_ix in self.party_defending:
+                try:
+                    self.party_defending.remove(cur_ix)
+                except Exception:
+                    pass
             self.ui_menu_options.append(('attack', 'Attack'))
-            # Build skills list for current actor
+            self.ui_menu_options.append(('defend', 'Defend'))
+            # Build skills list based on class and level (matches begin_player_turn)
             skills: List[Tuple[str, str]] = []
-            if a.cls == 'Mage':
-                skills.append(('spell', 'Spark'))
-            if a.cls == 'Priest':
-                skills.append(('heal', 'Heal'))
-            # Filter by resource availability
+            if a.cls == 'Fighter':
+                if a.level >= 1: skills.append(('sunder', 'Sunder'))
+                if a.level >= 3: skills.append(('rush', 'Rush'))
+                if a.level >= 5: skills.append(('combo', 'Combo'))
+            elif a.cls == 'Rogue':
+                if a.level >= 1: skills.append(('backstab', 'Backstab'))
+                if a.level >= 3: skills.append(('dust', 'Dust'))
+                if a.level >= 5: skills.append(('flashbang', 'Flashbang'))
+            elif a.cls == 'Priest':
+                if a.level >= 1: skills.append(('regen', 'Regen'))
+                if a.level >= 3: skills.append(('mend', 'Mend'))
+                if a.level >= 5: skills.append(('heal', 'Heal'))
+            elif a.cls == 'Mage':
+                if a.level >= 1: skills.append(('spell', 'Spark'))
+                if a.level >= 3: skills.append(('surge', 'Surge'))
+                if a.level >= 5: skills.append(('storm', 'Storm'))
+            # Filter by resource availability (e.g., MP > 0 for mana skills)
             filt: List[Tuple[str, str]] = []
             for sid, label in skills:
                 if sid in ('spell', 'heal') and a.mp <= 0:
@@ -1231,6 +1357,11 @@ class Battle:
             self.skill_menu_index = 0
         else:
             # Enemy AI chooses an action based on monster id/state
+            # Start-of-turn status for enemy
+            if self._start_of_turn_effects('enemy', ix):
+                # skip turn
+                self.advance_turn()
+                return
             act = self.enemy_choose_action(ix)
             if act is None:
                 # fallback basic attack
@@ -1395,17 +1526,36 @@ class Battle:
         if not a:
             self.finish_defeat(); return
         # Main menu
+        # Expire defend on turn start for this actor
+        cur_ix = self.current_actor_global_ix()
+        if cur_ix is not None and cur_ix in self.party_defending:
+            try:
+                self.party_defending.remove(cur_ix)
+            except KeyError:
+                pass
         self.ui_menu_options.append(('attack', 'Attack'))
+        self.ui_menu_options.append(('defend', 'Defend'))
         self.ui_menu_options.append(('skill', 'Skill'))
         self.ui_menu_options.append(('item', 'Items'))
         self.ui_menu_options.append(('run', 'Run'))
-        # Build skills list for current actor from config
+        # Build skills list based on class and level
         skills: List[Tuple[str, str]] = []
-        for ent in self.skills_config.get(a.cls, []):
-            sid = ent.get('id')
-            label = ent.get('name', sid)
-            if sid:
-                skills.append((sid, label))
+        if a.cls == 'Fighter':
+            if a.level >= 1: skills.append(('sunder', 'Sunder'))
+            if a.level >= 3: skills.append(('rush', 'Rush'))
+            if a.level >= 5: skills.append(('combo', 'Combo'))
+        elif a.cls == 'Rogue':
+            if a.level >= 1: skills.append(('backstab', 'Backstab'))
+            if a.level >= 3: skills.append(('dust', 'Dust'))
+            if a.level >= 5: skills.append(('flashbang', 'Flashbang'))
+        elif a.cls == 'Priest':
+            if a.level >= 1: skills.append(('regen', 'Regen'))
+            if a.level >= 3: skills.append(('mend', 'Mend'))
+            if a.level >= 5: skills.append(('heal', 'Heal'))
+        elif a.cls == 'Mage':
+            if a.level >= 1: skills.append(('spell', 'Spark'))
+            if a.level >= 3: skills.append(('surge', 'Surge'))
+            if a.level >= 5: skills.append(('storm', 'Storm'))
         # Could add more per-class skills here later
         # Filter by resource availability (e.g., MP > 0)
         filt: List[Tuple[str, str]] = []
@@ -1436,10 +1586,37 @@ class Battle:
         # Slightly longer pre-impact pause for certain enemy skills (e.g., Goblin Trip)
         if action.get('type') == 'trip':
             self.anim['dur'] = [240, 220, 260, 180]
+        # Spells (e.g., Spark): extend pre stage to 1000ms to allow visible projectile travel
+        if action.get('type') == 'spell':
+            self.anim['dur'] = [240, 1000, 240, 180]
+        # Slime 'splash' (spray) projectile travel time
+        if action.get('type') == 'splash':
+            self.anim['dur'] = [240, 1000, 240, 180]
+        # Skill-specific timing/feel
+        if action.get('type') in ('sunder',):
+            # normal hit cadence like attack
+            self.anim['dur'] = [240, 140, 240, 160]
+        if action.get('type') in ('rush',):
+            # longer pre to travel up to target, snappy impact
+            self.anim['dur'] = [200, 380, 240, 180]
+        if action.get('type') in ('combo',):
+            # quick approach, longer impact for double bump
+            self.anim['dur'] = [180, 260, 300, 200]
+        if action.get('type') in ('backstab',):
+            # fade/teleport feel: longer pre, then impact
+            self.anim['dur'] = [200, 420, 240, 200]
         self.state = 'anim'
 
     def add_floater(self, side: str, index: int, text: str, dur: int = 700, color=WHITE):
         self.floaters.append({'side': side, 'index': index, 'text': text, 'start': pygame.time.get_ticks(), 'dur': dur, 'color': color})
+
+    def make_defend_action(self) -> Optional[Dict[str, Any]]:
+        gi = self.current_actor_global_ix()
+        if gi is None:
+            return None
+        return {
+            'type': 'defend', 'actor_side': 'party', 'actor_index': gi,
+        }
 
     def make_item_use_action(self, actor: Character, target_gi: int, iid: str) -> Optional[Dict[str, Any]]:
         it = self.items_by_id.get(iid)
@@ -1470,6 +1647,19 @@ class Battle:
             'target_side': 'party', 'target_index': target_gi,
             'heal': heal, 'actor_name': actor.name,
         }
+
+    def make_skill_action(self, actor: Character, target_i: Optional[int], sid: str) -> Optional[Dict[str, Any]]:
+        gi = self.party.members.index(actor)
+        # Map skills into actions
+        if sid in ('sunder','rush','combo','backstab','dust') and target_i is None:
+            return None
+        if sid in ('flashbang','surge','storm'):
+            return {'type': sid, 'actor_side': 'party', 'actor_index': gi}
+        if sid in ('regen','mend'):
+            return {'type': sid, 'actor_side': 'party', 'actor_index': gi, 'target_side': 'party', 'target_index': target_i}
+        if sid in ('sunder','rush','combo','backstab','dust'):
+            return {'type': sid, 'actor_side': 'party', 'actor_index': gi, 'target_side': 'enemy', 'target_index': target_i}
+        return None
 
     def update(self):
         now = pygame.time.get_ticks()
@@ -1544,11 +1734,23 @@ class Battle:
 
     def resolve_action_impact(self, act: Dict[str, Any]):
         if act['type'] in ('attack', 'spell'):
+            # Blind: attacking with blind causes miss and consumes 1 stack (attack only)
+            if act.get('type') == 'attack':
+                a_side = act.get('actor_side'); a_ix = act.get('actor_index')
+                if self._status_get(a_side, a_ix, 'blind') > 0:
+                    act['hit'] = False
+                    self._status_dec(a_side, a_ix, 'blind', 1)
             if act.get('hit', False):
                 dmg = max(1, int(act.get('dmg', 1)))
+                # Weak reduces outgoing damage; Vulnerable increases incoming damage
+                a_side = act.get('actor_side'); a_ix = act.get('actor_index')
+                if self._status_get(a_side, a_ix, 'weak') > 0:
+                    dmg = max(1, int(math.ceil(dmg * 0.5)))
                 if act['target_side'] == 'enemy':
                     i = act['target_index']
                     if 0 <= i < len(self.enemies):
+                        if self._status_get('enemy', i, 'vulnerable') > 0:
+                            dmg = max(1, int(math.ceil(dmg * 1.5)))
                         self.enemies[i].hp -= dmg
                         self.effects.trigger('enemy', i, 300, 7)
                         try:
@@ -1566,6 +1768,11 @@ class Battle:
                     gi = act['target_index']
                     if 0 <= gi < len(self.party.members):
                         t = self.party.members[gi]
+                        # If defending, reduce incoming damage by 50% (rounded up), minimum 1
+                        if gi in self.party_defending:
+                            dmg = max(1, int(math.ceil(dmg * 0.5)))
+                        if self._status_get('party', gi, 'vulnerable') > 0:
+                            dmg = max(1, int(math.ceil(dmg * 1.5)))
                         t.hp -= dmg
                         try:
                             # party hurt sfx
@@ -1590,6 +1797,13 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(act.get('miss_label', 'The attack misses.'))
+        elif act['type'] == 'defend':
+            gi = act.get('actor_index')
+            if gi is not None:
+                self.party_defending.add(gi)
+                # brief visual cue
+                self.add_floater('party', gi, 'DEFEND', 700, BLUE)
+                self.log.add(f"{self.party.members[gi].name} braces for impact.")
         elif act['type'] == 'heal':
             gi = act['target_index']
             amt = act.get('heal', 0)
@@ -1637,6 +1851,102 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(act.get('label', f"{e.name} heals."))
+        elif act['type'] in ('sunder','rush','combo','backstab','dust','flashbang','surge','storm','regen','mend'):
+            # Implement class skills effects
+            a_ix = act.get('actor_index')
+            if act['type'] == 'regen':
+                gi = act.get('target_index')
+                if 0 <= gi < len(self.party.members):
+                    self._status_add('party', gi, 'regen', 3)
+                    self.add_floater('party', gi, 'REGEN', 700, YELLOW)
+                    self.log.add(f"{self.party.members[a_ix].name} casts Regen.")
+            elif act['type'] == 'mend':
+                gi = act.get('target_index')
+                if 0 <= gi < len(self.party.members):
+                    for name in ('poison','bleed','blind','vulnerable','weak','stun'):
+                        self._status_set('party', gi, name, 0)
+                    self.add_floater('party', gi, 'MEND', 700, YELLOW)
+                    self.log.add(f"{self.party.members[a_ix].name} uses Mend.")
+            elif act['type'] == 'dust':
+                i = act.get('target_index')
+                if 0 <= i < len(self.enemies):
+                    self._status_add('enemy', i, 'blind', 2)
+                    self.add_floater('enemy', i, 'BLIND', 700, WHITE)
+                    self.log.add(f"{self.party.members[a_ix].name} throws dust!")
+            elif act['type'] == 'flashbang':
+                for i, e in enumerate(self.enemies):
+                    if e.hp > 0:
+                        self._status_add('enemy', i, 'stun', 1)
+                        self.add_floater('enemy', i, 'STUN', 700, WHITE)
+                self.log.add(f"{self.party.members[a_ix].name} uses Flashbang!")
+            elif act['type'] in ('sunder','rush','combo','backstab'):
+                i = act.get('target_index')
+                if 0 <= i < len(self.enemies):
+                    # base damage like attack
+                    actor = self.party.members[a_ix]
+                    base = max(1, random.randint(1, 6) + actor.atk_bonus)
+                    hit = True if act['type'] == 'backstab' else (random.random() < 0.65)
+                    if act['type'] == 'sunder':
+                        base += 1
+                    if act['type'] == 'rush':
+                        base += 3
+                        self._status_add('party', a_ix, 'vulnerable', 1)
+                    times = 2 if act['type'] == 'combo' else 1
+                    total_dmg = 0
+                    for _ in range(times):
+                        if hit and self.enemies[i].hp > 0:
+                            dmg = base
+                            # apply weak/vulnerable modifiers
+                            if self._status_get('party', a_ix, 'weak') > 0:
+                                dmg = max(1, int(math.ceil(dmg * 0.5)))
+                            if self._status_get('enemy', i, 'vulnerable') > 0:
+                                dmg = max(1, int(math.ceil(dmg * 1.5)))
+                            self.enemies[i].hp -= dmg
+                            total_dmg += dmg
+                            # play hit effects
+                            self.effects.trigger('enemy', i, 300, 7)
+                            try:
+                                self.sfx.play('enemy_hurt', 0.7)
+                            except Exception:
+                                pass
+                            self.add_floater('enemy', i, str(dmg), 700, WHITE)
+                            if self.enemies[i].hp <= 0:
+                                self.enemies[i].hp = 0
+                                self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                        else:
+                            self.add_floater('enemy', i, 'MISS', 700, WHITE)
+                    if act['type'] == 'sunder' and hit:
+                        self._status_add('enemy', i, 'vulnerable', 2)
+                    self.log.add(f"{self.party.members[a_ix].name} uses {act['type'].title()} for {total_dmg}.")
+            elif act['type'] == 'surge':
+                # Spark-like damage to all
+                total_dmg = 0
+                for i, e in enumerate(self.enemies):
+                    if e.hp <= 0: continue
+                    dmg = max(1, random.randint(4, 8))
+                    if self._status_get('enemy', i, 'vulnerable') > 0:
+                        dmg = max(1, int(math.ceil(dmg * 1.5)))
+                    e.hp -= dmg
+                    total_dmg += dmg
+                    self.add_floater('enemy', i, str(dmg), 700, WHITE)
+                    if e.hp <= 0:
+                        e.hp = 0; self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                self.log.add(f"{self.party.members[a_ix].name} casts Surge for {total_dmg}.")
+            elif act['type'] == 'storm':
+                total_dmg = 0
+                for _ in range(3):
+                    alive = [i for i,e in enumerate(self.enemies) if e.hp > 0]
+                    if not alive: break
+                    i = random.choice(alive)
+                    dmg = max(1, random.randint(4, 8))
+                    if self._status_get('enemy', i, 'vulnerable') > 0:
+                        dmg = max(1, int(math.ceil(dmg * 1.5)))
+                    self.enemies[i].hp -= dmg
+                    total_dmg += dmg
+                    self.add_floater('enemy', i, str(dmg), 700, WHITE)
+                    if self.enemies[i].hp <= 0:
+                        self.enemies[i].hp = 0; self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                self.log.add(f"{self.party.members[a_ix].name} calls Storm for {total_dmg}.")
         elif act['type'] == 'pulse':
             ix = act.get('actor_index', -1)
             if 0 <= ix < len(self.enemies):
@@ -3934,6 +4244,10 @@ class Game:
                         b.target_menu_index = 0
                         if not alive_enemy_indices:
                             b.begin_player_turn()
+                    elif chosen_id == 'defend':
+                        act = b.make_defend_action()
+                        if act:
+                            b.start_animation(act)
                     elif chosen_id == 'skill':
                         # Only enter skill menu if there are skills available
                         if not b.skill_options:
@@ -3972,11 +4286,21 @@ class Game:
                             b.state = 'target'
                             b.target_mode = {'side': 'enemy', 'action': 'spell'}
                             b.target_menu_index = 0
-                        elif sid == 'heal':
+                        elif sid in ('sunder','rush','combo','backstab','dust'):
+                            b.state = 'target'
+                            b.target_mode = {'side': 'enemy', 'action': sid}
+                            b.target_menu_index = 0
+                        elif sid in ('regen','mend','heal'):
                             # choose party target
                             b.state = 'target'
-                            b.target_mode = {'side': 'party', 'action': 'heal'}
+                            b.target_mode = {'side': 'party', 'action': sid}
                             b.target_menu_index = 0
+                        elif sid in ('flashbang','surge','storm'):
+                            # no target selection (AOE)
+                            actor = b.current_actor()
+                            act = b.make_skill_action(actor, None, sid)
+                            if act:
+                                b.start_animation(act)
                 elif event.key == pygame.K_ESCAPE:
                     b.state = 'menu'
             elif b.state == 'target':
@@ -3997,10 +4321,13 @@ class Game:
                         self.sfx.play('ui_select', 0.6)
                         actor = b.current_actor()
                         target_i = alive[b.target_menu_index]
-                        if b.target_mode.get('action') == 'attack':
+                        action_id = b.target_mode.get('action')
+                        if action_id == 'attack':
                             act = b.make_attack_action(actor, target_i)
-                        else:
+                        elif action_id == 'spell':
                             act = b.make_spell_action(actor, target_i)
+                        else:
+                            act = b.make_skill_action(actor, target_i, action_id)
                         if act:
                             b.start_animation(act)
                     elif event.key == pygame.K_ESCAPE:
@@ -4023,8 +4350,11 @@ class Game:
                         self.sfx.play('ui_select', 0.6)
                         actor = b.current_actor()
                         target_gi = alive_gi[b.target_menu_index]
-                        if b.target_mode.get('action') == 'heal':
+                        action_id = b.target_mode.get('action')
+                        if action_id == 'heal':
                             act = b.make_heal_action(actor, target_gi)
+                        elif action_id in ('regen','mend'):
+                            act = b.make_skill_action(actor, target_gi, action_id)
                         elif b.target_mode.get('action') == 'item':
                             iid = b.selected_item_iid
                             act = b.make_item_use_action(actor, target_gi, iid) if iid else None
@@ -4163,10 +4493,146 @@ class Game:
                     off = int(max_off * (1.0 - p))
             if act.get('actor_side') == 'party' and act.get('actor_index') is not None:
                 # Party lunges upward (negative y)
-                offsets_party[act['actor_index']] = -off
+                extra_bounce = 0
+                extra_forward = 0
+                # For Spark spell: add a small bounce during pre-shot
+                if act.get('type') == 'spell' and len(durs) >= 4 and stage == 1:
+                    extra_bounce = int(4 * math.sin(p * math.pi))
+                # Rush/Combo/Backstab movement
+                if act.get('type') in ('rush','combo','backstab') and len(durs) >= 4:
+                    ai = act.get('actor_index')
+                    ti = act.get('target_index')
+                    # Compute base centers using renderer math (to match exact window positions)
+                    gap = 16
+                    # Party centers
+                    members = [self.party.members[i] for i in self.party.active
+                               if 0 <= i < len(self.party.members)
+                               and self.party.members[i].alive and self.party.members[i].hp > 0]
+                    n = max(1, len(members))
+                    w = min(220, (WIDTH - gap * (n + 1)) // max(1, n))
+                    total = n * w + (n + 1) * gap
+                    xstart = (WIDTH - total) // 2 + gap
+                    col = 0
+                    for idx, m in enumerate(members):
+                        try:
+                            if self.party.members.index(m) == ai:
+                                col = idx; break
+                        except Exception:
+                            pass
+                    src_cx = xstart + col * (w + gap) + w // 2
+                    base_party_y = VIEW_H - 60 - 16
+                    # Enemy centers (from battle state)
+                    alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                    ne = max(1, len(alive))
+                    we = min(220, (WIDTH - gap * (ne + 1)) // max(1, ne))
+                    totale = ne * we + (ne + 1) * gap
+                    xse = (WIDTH - totale) // 2 + gap
+                    j = sorted(alive).index(ti) if ti in alive else 0
+                    dst_cx = xse + j * (we + gap) + we // 2
+                    enemy_y = 28
+                    dy_full = enemy_y - base_party_y  # negative
+                    dx_full = dst_cx - src_cx
+                    if act.get('type') == 'rush':
+                        # Rush: move exactly onto target center over stages
+                        if stage == 1:
+                            offsets_party[ai] = int(dy_full * (p * p * p))
+                            offsets_party_x[ai] = int(dx_full * (p * p))
+                        elif stage == 2:
+                            offsets_party[ai] = dy_full + int(10 * abs(math.sin(p * math.pi)))
+                            offsets_party_x[ai] = dx_full
+                        elif stage == 3:
+                            offsets_party[ai] = int(dy_full * (1.0 - p))
+                            offsets_party_x[ai] = int(dx_full * (1.0 - p))
+                    elif act.get('type') == 'combo':
+                        # Partial forward lunge, double bump on impact
+                        if stage == 1:
+                            offsets_party[ai] = int(dy_full * 0.3 * (p * p))
+                            offsets_party_x[ai] = int(dx_full * 0.3 * (p * p))
+                        elif stage == 2:
+                            offsets_party[ai] += int(8 * abs(math.sin(p * math.pi * 2)))
+                    elif act.get('type') == 'backstab':
+                        # Teleport-style: fade out, then appear at side of target (no pre motion)
+                        side_dir = -1 if (ti or 0) % 2 else 1
+                        side_gap = we // 2 + 14
+                        target_x_side = dst_cx + side_dir * side_gap
+                        dx_side = target_x_side - src_cx
+                        if stage == 1:
+                            if p < 0.5:
+                                # no motion during fade-out
+                                offsets_party[ai] = 0; offsets_party_x[ai] = 0
+                            else:
+                                # appear at side; keep Y aligned with enemy row before impact
+                                offsets_party[ai] = dy_full
+                                offsets_party_x[ai] = dx_side
+                        elif stage == 2:
+                            # bump into target from the side
+                            offsets_party[ai] = dy_full + int(8 * abs(math.sin(p * math.pi)))
+                            offsets_party_x[ai] = dx_side
+                        elif stage == 3:
+                            # return to origin
+                            offsets_party[ai] = int(dy_full * (1.0 - p))
+                            offsets_party_x[ai] = int(dx_side * (1.0 - p))
+                base_up = -(off + extra_bounce)
+                if act.get('type') not in ('rush','combo','backstab') or len(durs) < 4:
+                    # Default behavior for non-special skills
+                    offsets_party[act['actor_index']] = base_up - extra_forward
+                # Backstab: approximate horizontal slide during pre without needing rects
+                if act.get('type') == 'backstab' and len(durs) >= 4 and stage == 1:
+                    ai = act.get('actor_index'); ti = act.get('target_index')
+                    # Move toward the right for even targets, left for odd targets to simulate circling
+                    dir_ = -1 if (ti or 0) % 2 else 1
+                    max_dx = 120  # pixels
+                    offsets_party_x[ai] = int(dir_ * max_dx * (p * p))
             elif act.get('actor_side') == 'enemy' and act.get('actor_index') is not None:
-                # Enemy lunges downward (positive y)
-                offsets_enemy[act['actor_index']] = off
+                # Enemy lunges downward (positive y) / special movements
+                extra_bounce_e = 0
+                if act.get('type') == 'splash' and len(durs) >= 4 and stage == 1:
+                    extra_bounce_e = int(3 * math.sin(p * math.pi))
+                ai = act.get('actor_index')
+                ti = act.get('target_index')
+                if act.get('type') == 'rush' and len(durs) >= 4:
+                    # Compute exact centers for enemy actor and party target
+                    gap = 16
+                    # Enemy centers
+                    alive_e = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                    ne = max(1, len(alive_e))
+                    we = min(220, (WIDTH - gap * (ne + 1)) // max(1, ne))
+                    total_e = ne * we + (ne + 1) * gap
+                    xse = (WIDTH - total_e) // 2 + gap
+                    j_ai = sorted(alive_e).index(ai) if ai in alive_e else 0
+                    src_cx = xse + j_ai * (we + gap) + we // 2
+                    enemy_y = 28
+                    # Party centers
+                    members = [self.party.members[i] for i in self.party.active
+                               if 0 <= i < len(self.party.members)
+                               and self.party.members[i].alive and self.party.members[i].hp > 0]
+                    n = max(1, len(members))
+                    w = min(220, (WIDTH - gap * (n + 1)) // max(1, n))
+                    total_p = n * w + (n + 1) * gap
+                    xsp = (WIDTH - total_p) // 2 + gap
+                    # find target col among actives
+                    col_t = 0
+                    for idx, m in enumerate(members):
+                        try:
+                            if self.party.members.index(m) == ti:
+                                col_t = idx; break
+                        except Exception:
+                            pass
+                    dst_cx = xsp + col_t * (w + gap) + w // 2
+                    base_party_y = VIEW_H - 60 - 16
+                    dy_full = base_party_y - enemy_y  # move down
+                    dx_full = dst_cx - src_cx
+                    if stage == 1:
+                        offsets_enemy[ai] = int(dy_full * (p * p * p))
+                        offsets_enemy_x[ai] = int(dx_full * (p * p))
+                    elif stage == 2:
+                        offsets_enemy[ai] = dy_full + int(10 * abs(math.sin(p * math.pi)))
+                        offsets_enemy_x[ai] = dx_full
+                    elif stage == 3:
+                        offsets_enemy[ai] = int(dy_full * (1.0 - p))
+                        offsets_enemy_x[ai] = int(dx_full * (1.0 - p))
+                else:
+                    offsets_enemy[ai] = off + extra_bounce_e
             # If an attack/spell missed, slide the target sideways on impact and return during recover
             if act.get('type') in ('attack', 'spell') and not act.get('hit', True):
                 target_ix = act.get('target_index')
@@ -4213,8 +4679,139 @@ class Game:
             for i in to_remove:
                 b.enemy_spin.pop(i, None)
 
+        # Screen shake on Rush impact
+        if b and b.state == 'anim' and b.anim:
+            act = b.anim['action']
+            stage = b.anim.get('stage', 0)
+            if act.get('type') == 'rush' and stage == 2:
+                sx = random.randint(-4, 4)
+                sy = random.randint(-4, 4)
+                # apply to all visible windows
+                for i in range(len(b.enemies)):
+                    offsets_enemy[i] = offsets_enemy.get(i, 0) + sy
+                    offsets_enemy_x[i] = offsets_enemy_x.get(i, 0) + sx
+                party_active_ix = [i for i in self.party.active if 0 <= i < len(self.party.members) and self.party.members[i].alive and self.party.members[i].hp > 0]
+                for gi in party_active_ix:
+                    offsets_party[gi] = offsets_party.get(gi, 0) + sy
+                    offsets_party_x[gi] = offsets_party_x.get(gi, 0) + sx
+
         enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog, offsets_enemy, offsets_enemy_x, rotations_enemy) if b else {}
         party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting, offsets_party, offsets_party_x)
+
+        # Spell projectile (Spark): rotating triangle from caster to target during pre stage
+        if b and b.state == 'anim' and b.anim:
+            act = b.anim['action']
+            if act.get('type') == 'spell' and act.get('actor_side') == 'party':
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 1:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = 0.0
+                    if dur > 0:
+                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    ai = act.get('actor_index')
+                    ti = act.get('target_index')
+                    src_rect = party_rects.get(ai)
+                    dst_rect = enemy_rects.get(ti)
+                    if src_rect and dst_rect:
+                        sx, sy = src_rect.centerx, src_rect.top
+                        ex, ey = dst_rect.centerx, dst_rect.centery
+                        # Strong ease-in so it starts very slow and accelerates toward target
+                        pe = p * p * p
+                        cx = sx + (ex - sx) * pe
+                        cy = sy + (ey - sy) * pe
+                        # Triangle pointing towards target, rotating slightly over time (equilateral)
+                        base_size = 16
+                        ang = math.atan2(ey - sy, ex - sx)
+                        spin = (now / 500.0) % (2 * math.pi)
+                        theta = ang + spin
+                        # Trail: draw semi-transparent filled triangles at prior positions
+                        trail = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                        for k in range(1, 6):
+                            tk = p - k * 0.06
+                            if tk <= 0:
+                                continue
+                            tke = tk * tk
+                            tx = sx + (ex - sx) * tke
+                            ty = sy + (ey - sy) * tke
+                            size_k = max(6, int(base_size * (0.85 ** k)))
+                            tip_k = (tx + math.cos(theta) * size_k, ty + math.sin(theta) * size_k)
+                            left_k = (tx + math.cos(theta + 2.0 * math.pi / 3.0) * size_k, ty + math.sin(theta + 2.0 * math.pi / 3.0) * size_k)
+                            right_k = (tx + math.cos(theta - 2.0 * math.pi / 3.0) * size_k, ty + math.sin(theta - 2.0 * math.pi / 3.0) * size_k)
+                            alpha = max(20, 120 - k * 18)
+                            pygame.draw.polygon(trail, (240, 220, 80, alpha), [tip_k, left_k, right_k])
+                        view.blit(trail, (0, 0))
+                        # Main triangle: outline only (no fill)
+                        tip = (cx + math.cos(theta) * base_size, cy + math.sin(theta) * base_size)
+                        left = (cx + math.cos(theta + 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta + 2.0 * math.pi / 3.0) * base_size)
+                        right = (cx + math.cos(theta - 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta - 2.0 * math.pi / 3.0) * base_size)
+                        pygame.draw.polygon(view, YELLOW, [tip, left, right], 2)
+            # Slime 'splash' visual: green circle projectiles to each party member
+            elif act.get('type') == 'splash' and act.get('actor_side') == 'enemy':
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 1:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = 0.0
+                    if dur > 0:
+                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    ei = act.get('actor_index')
+                    src_rect = enemy_rects.get(ei)
+                    if src_rect:
+                        sx, sy = src_rect.centerx, src_rect.bottom
+                        # Targets: alive active party members
+                        alive_gi = [i for i in self.party.active
+                                    if 0 <= i < len(self.party.members)
+                                    and self.party.members[i].alive and self.party.members[i].hp > 0]
+                        # Draw trail surface once
+                        trail = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                        for gi in alive_gi:
+                            dst_rect = party_rects.get(gi)
+                            if not dst_rect:
+                                continue
+                            ex, ey = dst_rect.centerx, dst_rect.top
+                            # strong ease-in for slower start
+                            pe = p * p * p
+                            cx = sx + (ex - sx) * pe
+                            cy = sy + (ey - sy) * pe
+                            # Trail: faded green circles along prior eased positions
+                            for k in range(1, 6):
+                                tk = p - k * 0.06
+                                if tk <= 0:
+                                    continue
+                                tke = tk * tk * tk
+                                tx = sx + (ex - sx) * tke
+                                ty = sy + (ey - sy) * tke
+                                r_k = max(3, int(8 * (0.85 ** k)))
+                                alpha = max(20, 110 - k * 18)
+                                pygame.draw.circle(trail, (64, 200, 100, alpha), (int(tx), int(ty)), r_k)
+                            # Main circle outline
+                            pygame.draw.circle(trail, GREEN, (int(cx), int(cy)), 10, 2)
+                        view.blit(trail, (0, 0))
+            # Backstab fade effect: fade out then fade in near target during pre stage
+            if act.get('type') == 'backstab' and act.get('actor_side') == 'party':
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 1:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    ai = act.get('actor_index')
+                    rect = party_rects.get(ai)
+                    if rect:
+                        # first half: fade out, second half: fade in
+                        if p < 0.5:
+                            a = int(255 * (p / 0.5))
+                        else:
+                            a = int(255 * (1.0 - (p - 0.5) / 0.5))
+                        cover = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+                        cover.fill((20, 20, 28, a))
+                        view.blit(cover, (rect.x, rect.y))
         # Turn order panel on the left (vertically centered, padded)
         if b and b.turn_order:
             inner_px, inner_py = 10, 10
@@ -4485,6 +5082,36 @@ class Game:
                 t = self.grid()[y][x]
                 special = t in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
                 self.check_special_tile()
+                # Status ticks per step for party (poison/bleed/regen)
+                try:
+                    for gi, m in enumerate(self.party.members):
+                        if not (m.alive and m.hp > 0):
+                            continue
+                        # Poison tick and possible expiry
+                        p_stacks = int(m.statuses.get('poison', 0))
+                        if p_stacks > 0:
+                            m.hp = max(0, m.hp - p_stacks)
+                            newp = p_stacks - 1
+                            if newp > 0:
+                                m.statuses['poison'] = newp
+                            else:
+                                m.statuses.pop('poison', None)
+                                self.log.add(f"Poison on {m.name} expires.")
+                        # Bleed tick (no expiry here)
+                        if int(m.statuses.get('bleed', 0)) > 0:
+                            m.hp = max(0, m.hp - 1)
+                        # Regen tick and possible expiry
+                        r = int(m.statuses.get('regen', 0))
+                        if r > 0:
+                            m.hp = min(m.max_hp, m.hp + r)
+                            newr = r - 1
+                            if newr > 0:
+                                m.statuses['regen'] = newr
+                            else:
+                                m.statuses.pop('regen', None)
+                                self.log.add(f"Regen on {m.name} expires.")
+                except Exception:
+                    pass
                 # Treasure chest pickup (step onto a chest tile)
                 try:
                     lvl = self.dun.levels[self.level_ix]
