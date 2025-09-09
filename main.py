@@ -719,7 +719,7 @@ class Renderer:
             self._overlay_torch_fov(view, grid, px, py, facing, cell, ox, oy, radius,
                                      world_px_off=int(shift_px[0]), world_py_off=int(shift_px[1]),
                                      player_center_frac=(pxf, pyf))
-        self.text_small(view, f"L{level_ix} pos {pos} {DIR_NAMES[facing]}", (12, 6))
+        # Floor/position/direction are rendered by Game.draw_floor_indicator()
 
     def _overlay_vision_cone(self, surf: pygame.Surface, center: Tuple[int, int], facing: int,
                               spread_deg: float = 80.0, steps: int = 16, edge_alpha: int = 220):
@@ -3897,6 +3897,7 @@ class Game:
         try:
             self.draw_threat_flash()
             self.draw_threat_indicator()
+            self.draw_floor_indicator()
             self.draw_treasure_popup()
             self.draw_door_confirm()
         except Exception:
@@ -3997,6 +3998,39 @@ class Game:
         # Draw from bottom up
         if filled > 0:
             pygame.draw.rect(view, col, (x + 2, y + h - filled + 2, w - 4, filled - 4))
+
+    def draw_floor_indicator(self):
+        # Top-left label showing current floor (1-based) with position and facing under it
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        margin = 10
+        x, y = margin, margin
+        floor_num = int(self.level_ix) + 1
+        label1 = f"Floor {floor_num}"
+        px, py = self.pos
+        try:
+            facing_label = DIR_NAMES[self.facing]
+        except Exception:
+            facing_label = "?"
+        label2 = f"({px},{py}) {facing_label}"
+        # Measure text
+        try:
+            s1 = self.r.font_small.render(label1, True, WHITE)
+            s2 = self.r.font_small.render(label2, True, WHITE)
+            w1, h1 = s1.get_width(), s1.get_height()
+            w2, h2 = s2.get_width(), s2.get_height()
+        except Exception:
+            w1 = max(88, len(label1) * 6); h1 = 16
+            w2 = max(88, len(label2) * 6); h2 = 16
+        pad_x, pad_y = 8, 4
+        gap = 2
+        width = max(w1, w2) + pad_x * 2
+        height = h1 + h2 + gap + pad_y * 2
+        rect = pygame.Rect(x, y, width, height)
+        pygame.draw.rect(view, (24, 24, 28), rect, border_radius=6)
+        pygame.draw.rect(view, (70, 70, 80), rect, 1, border_radius=6)
+        # Draw text lines
+        self.r.text_small(view, label1, (x + pad_x, y + pad_y), YELLOW)
+        self.r.text_small(view, label2, (x + pad_x, y + pad_y + h1 + gap), LIGHT)
 
     def trigger_threat_flash(self):
         self.threat_flash_active = True
