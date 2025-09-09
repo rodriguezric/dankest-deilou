@@ -2385,6 +2385,20 @@ class Game:
         self.door_confirm_index: int = 1  # 0 Yes, 1 No
         self.door_confirm_pos: Optional[Tuple[int, int]] = None
 
+    def party_average_level(self) -> float:
+        # Prefer alive active members; fall back to alive members; else all members; default 1.0
+        vals: List[int] = [m.level for m in self.party.alive_active_members()]
+        if not vals:
+            vals = [m.level for m in self.party.alive_members()]
+        if not vals:
+            vals = [m.level for m in self.party.members]
+        if not vals:
+            return 1.0
+        try:
+            return sum(vals) / float(len(vals))
+        except Exception:
+            return 1.0
+
 
     def load_json(self, path: str, default):
         try:
@@ -3167,11 +3181,12 @@ class Game:
                     s["step"] = 1
 
     # --------------- Trait Selection ---------------
-    def start_trait_selection(self, member_ix: int):
+    def start_trait_selection(self, member_ix: int, return_mode: str = MODE_PARTY):
         now = pygame.time.get_ticks()
         self.trait_state = {
             'member_ix': member_ix,
             'traits': ['Quick', 'Strong', 'Focused', 'Tough'],
+            'return_mode': return_mode,
             'left_idx': random.randint(0, 3),
             'right_idx': random.randint(0, 3),
             'left_steps': random.randint(22, 34),
@@ -3288,10 +3303,13 @@ class Game:
                 self.finish_trait_selection()
 
     def finish_trait_selection(self):
-        # Return to party screen after finishing traits
-        self.mode = MODE_PARTY
-        self.party_mode = 'menu'
-        self.party_actions_index = 0
+        # Return to caller-specified mode (party by default)
+        st = self.trait_state or {}
+        ret = st.get('return_mode', MODE_PARTY)
+        self.mode = ret
+        if ret == MODE_PARTY:
+            self.party_mode = 'menu'
+            self.party_actions_index = 0
         # clear state
         self.trait_state = {}
 
@@ -3657,6 +3675,10 @@ class Game:
                             m.max_mp += 1
                             m.mp = m.max_mp
                         self.log.add(f"{m.name} reached Lv{m.level}! +{gain} HP")
+                        # Every 2 levels starting at 3 (3,5,7,...) grant a bonus trait
+                        if m.level >= 3 and (m.level % 2 == 1):
+                            self.start_trait_selection(self.training_index, return_mode=MODE_TRAINING)
+                            return
                     else:
                         self.log.add("Not enough EXP.")
             elif event.key == pygame.K_ESCAPE:
@@ -5417,31 +5439,54 @@ class Game:
                             self.treasure_t0 = pygame.time.get_ticks()
                 except Exception:
                     pass
-                # Threat mechanic: increase per step, only trigger after staying full for at least one extra step
+                # Threat mechanic: increase per step based on party level vs floor, then maybe trigger
                 if self.mode == MODE_MAZE and not special:
+                    # Determine scaling based on average party level relative to floor number (level index)
+                    try:
+                        avg_lvl = self.party_average_level()
+                    except Exception:
+                        avg_lvl = 1.0
+                    # Floors are 1-based for scaling: level 0 => floor 1
+                    floor_num = int(self.level_ix) + 1
+                    diff = avg_lvl - floor_num
+                    # Compute per-step increment
+                    if diff <= 0:
+                        inc = int(self.threat_step_inc)
+                        encounters_disabled = False
+                    elif 0 < diff < 2:
+                        inc = max(0, int(self.threat_step_inc // 2))
+                        encounters_disabled = False
+                    else:
+                        inc = 0
+                        encounters_disabled = True
+                    # Apply increment
                     try:
                         prev = self.threat
-                        self.threat = min(self.threat_max, self.threat + self.threat_step_inc)
+                        self.threat = min(self.threat_max, self.threat + inc)
                     except Exception:
                         pass
-                    if self.threat >= self.threat_max:
-                        # trigger a brief red flash each step while full
-                        try:
-                            self.trigger_threat_flash()
-                        except Exception:
-                            pass
-                        if self.threat_full_steps == 0:
-                            # First time reaching full (or first step while full): do not trigger yet
-                            self.threat_full_steps = 1
-                        else:
-                            # Already spent at least 1 step while full — 50% chance to trigger now
-                            if random.random() < 0.5:
-                                self.start_battle()
-                                self.threat = 0
-                                self.threat_full_steps = 0
-                    else:
-                        # Not full: reset full-steps tracker
+                    # If encounters are disabled at this floor, skip triggering entirely
+                    if encounters_disabled:
                         self.threat_full_steps = 0
+                    else:
+                        if self.threat >= self.threat_max:
+                            # trigger a brief red flash each step while full
+                            try:
+                                self.trigger_threat_flash()
+                            except Exception:
+                                pass
+                            if self.threat_full_steps == 0:
+                                # First time reaching full (or first step while full): do not trigger yet
+                                self.threat_full_steps = 1
+                            else:
+                                # Already spent at least 1 step while full — 50% chance to trigger now
+                                if random.random() < 0.5:
+                                    self.start_battle()
+                                    self.threat = 0
+                                    self.threat_full_steps = 0
+                        else:
+                            # Not full: reset full-steps tracker
+                            self.threat_full_steps = 0
         # Handle combat intro sequence across modes
         if self.combat_intro_active:
             now = pygame.time.get_ticks()
