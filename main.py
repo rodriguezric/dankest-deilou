@@ -70,6 +70,7 @@ MODE_ITEMS = "ITEMS"
 MODE_COMBAT_INTRO = "COMBAT_INTRO"
 MODE_EQUIP = "EQUIP"
 MODE_SCENE = "SCENE"  # town<->labyrinth transition
+MODE_TRAIT = "TRAIT"   # post-creation trait selection
 
 # Temple costs
 TEMPLE_HEAL_PARTY_COST = 30
@@ -272,7 +273,7 @@ def roll_stat():
 
 
 def ability_mod(score: int) -> int:
-    return (score - 10) // 2
+    return (score - 5) // 2
 
 
 @dataclass
@@ -2296,6 +2297,9 @@ class Game:
         self.equip_slot_ix = 0  # 0 Weapon, 1 Armor, 2 Acc1, 3 Acc2
         self.equip_choose_ix = 0
 
+        # Trait selection state
+        self.trait_state: Dict[str, Any] = {}
+
         # Tavern UI state
         self.party_mode: str = 'menu'  # 'menu' | 'dismiss_select' | 'dismiss_confirm'
         self.party_actions_index = 0
@@ -3081,6 +3085,8 @@ class Game:
             self.r.text_small(view, f"Gold: {self.party.gold}g  Selected cost: {cost}g", (32, VIEW_H - 28), col)
         elif s["step"] == 2:
             temp = Character(s["name"], CLASSES[s["class_ix"]])
+            # Apply fixed starting stats per class (no random rolls)
+            self.apply_fixed_starting_stats(temp)
             self.r.text(view, f"Name: {temp.name}", (32, y))
             self.r.text(view, f"Class: {temp.cls}", (32, y + 20))
             y2 = y + 44
@@ -3091,7 +3097,8 @@ class Game:
             # Show recruit cost and party gold
             cost = CLASS_COSTS.get(temp.cls, 0)
             self.r.text(view, f"Cost: {cost}g    Party Gold: {self.party.gold}", (32, y2 + 66), YELLOW if self.party.gold >= cost else RED)
-            self.r.draw_center_menu(["Accept", "Reroll", "Cancel"], self.create_confirm_index)
+            # No reroll with fixed stats
+            self.r.draw_center_menu(["Accept", "Cancel"], self.create_confirm_index)
 
     def create_input(self, event):
         s = self.create_state
@@ -3123,9 +3130,9 @@ class Game:
                     s["step"] = 0
             elif s["step"] == 2:
                 if event.key in (pygame.K_UP, pygame.K_k):
-                    self.create_confirm_index = (self.create_confirm_index - 1) % 3
+                    self.create_confirm_index = (self.create_confirm_index - 1) % 2
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    self.create_confirm_index = (self.create_confirm_index + 1) % 3
+                    self.create_confirm_index = (self.create_confirm_index + 1) % 2
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     choice = self.create_confirm_index
                     if choice == 0:  # Accept
@@ -3139,13 +3146,18 @@ class Game:
                             else:
                                 self.party.gold -= cost
                                 newc = Character(s["name"], cls)
+                                # Apply fixed starting stats per class (no random rolls)
+                                self.apply_fixed_starting_stats(newc)
                                 self.party.members.append(newc)
                                 self.log.add(f"{newc.name} the {newc.cls} joins the roster (-{cost}g).")
+                                # Start post-creation trait selection for this new member
+                                ix = len(self.party.members) - 1
+                                self.start_trait_selection(ix)
+                                return
+                        # If creation didn’t proceed, return to party menu
                         self.mode = MODE_PARTY
                         self.party_mode = 'menu'
                         self.party_actions_index = 0
-                    elif choice == 1:  # Reroll
-                        s["step"] = 1; s["step"] = 2
                     else:  # Cancel
                         self.mode = MODE_PARTY
                         self.party_mode = 'menu'
@@ -3153,6 +3165,198 @@ class Game:
                 elif event.key == pygame.K_ESCAPE:
                     # back to class select
                     s["step"] = 1
+
+    # --------------- Trait Selection ---------------
+    def start_trait_selection(self, member_ix: int):
+        now = pygame.time.get_ticks()
+        self.trait_state = {
+            'member_ix': member_ix,
+            'traits': ['Quick', 'Strong', 'Focused', 'Tough'],
+            'left_idx': random.randint(0, 3),
+            'right_idx': random.randint(0, 3),
+            'left_steps': random.randint(22, 34),
+            'right_steps': random.randint(26, 40),
+            'left_delay': 40,
+            'right_delay': 40,
+            'left_next': now,
+            'right_next': now,
+            'phase': 'roll',  # 'roll' | 'choose' | 'merge_flash'
+            'selected': 0,    # 0 left, 1 right
+            'flash_t0': 0,
+            'flash_dur': 500,
+        }
+        self.mode = MODE_TRAIT
+
+    def trait_input(self, event):
+        if event.type != pygame.KEYDOWN:
+            return
+        st = self.trait_state
+        if not st:
+            return
+        if st.get('phase') == 'choose':
+            if event.key in (pygame.K_LEFT, pygame.K_a, pygame.K_h):
+                st['selected'] = 0
+            elif event.key in (pygame.K_RIGHT, pygame.K_d, pygame.K_l):
+                st['selected'] = 1
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                # Apply chosen trait
+                trait = st['traits'][st['left_idx'] if st['selected'] == 0 else st['right_idx']]
+                self.apply_trait_bonus(st['member_ix'], trait, double=False)
+                self.finish_trait_selection()
+            elif event.key == pygame.K_ESCAPE:
+                # Cancel falls back to left by default
+                trait = st['traits'][st['left_idx']]
+                self.apply_trait_bonus(st['member_ix'], trait, double=False)
+                self.finish_trait_selection()
+
+    def draw_trait(self):
+        st = self.trait_state
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((18, 18, 24))
+        self.r.text_big(view, "Choose Your Trait", (20, 16))
+        if not st:
+            return
+        traits = st['traits']
+        # Current labels
+        left_label = traits[st['left_idx'] % len(traits)]
+        right_label = traits[st['right_idx'] % len(traits)]
+        # Positions
+        cx = WIDTH // 2
+        cy = VIEW_H // 2 + 20
+        box_w, box_h = 240, 80
+        pad = 40
+        left_rect = pygame.Rect(cx - box_w - pad, cy - box_h // 2, box_w, box_h)
+        right_rect = pygame.Rect(cx + pad, cy - box_h // 2, box_w, box_h)
+        # Draw boxes
+        pygame.draw.rect(view, (50, 50, 60), left_rect, border_radius=6)
+        pygame.draw.rect(view, (50, 50, 60), right_rect, border_radius=6)
+        pygame.draw.rect(view, YELLOW if st.get('selected', 0) == 0 and st.get('phase') == 'choose' else (120,120,140), left_rect, 2, border_radius=6)
+        pygame.draw.rect(view, YELLOW if st.get('selected', 0) == 1 and st.get('phase') == 'choose' else (120,120,140), right_rect, 2, border_radius=6)
+        # Labels centered
+        self.r.text_big(view, left_label, (left_rect.x + 16, left_rect.y + 22), WHITE)
+        self.r.text_big(view, right_label, (right_rect.x + 16, right_rect.y + 22), WHITE)
+        # Instructions
+        if st.get('phase') == 'roll':
+            self.r.text_small(view, "Rolling...", (cx - 40, right_rect.bottom + 18), LIGHT)
+        elif st.get('phase') == 'choose':
+            self.r.text_small(view, "Left/Right to choose, Enter to confirm", (cx - 160, right_rect.bottom + 18), LIGHT)
+        elif st.get('phase') == 'merge_flash':
+            self.r.text_small(view, "Double Trait!", (cx - 60, right_rect.bottom + 18), YELLOW)
+            # Draw white flash overlay (ease-out)
+            now = pygame.time.get_ticks()
+            t0 = st.get('flash_t0', now)
+            dur = st.get('flash_dur', 500)
+            p = max(0.0, min(1.0, (now - t0) / float(max(1, dur))))
+            alpha = int(220 * (1.0 - p))
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((255, 255, 255, alpha))
+            view.blit(overlay, (0, 0))
+
+    def update_trait(self):
+        st = self.trait_state
+        if not st:
+            return
+        now = pygame.time.get_ticks()
+        # Rolling phase: step indices with increasing delays until steps reach zero
+        if st['phase'] == 'roll':
+            # left
+            if st['left_steps'] > 0 and now >= st['left_next']:
+                st['left_idx'] = (st['left_idx'] + 1) % len(st['traits'])
+                st['left_steps'] -= 1
+                st['left_delay'] = min(260, int(st['left_delay'] * 1.08 + 1))
+                st['left_next'] = now + st['left_delay']
+            # right
+            if st['right_steps'] > 0 and now >= st['right_next']:
+                st['right_idx'] = (st['right_idx'] + 1) % len(st['traits'])
+                st['right_steps'] -= 1
+                st['right_delay'] = min(260, int(st['right_delay'] * 1.08 + 1))
+                st['right_next'] = now + st['right_delay']
+            # If both stopped, move to choose/merge
+            if st['left_steps'] <= 0 and st['right_steps'] <= 0:
+                if st['traits'][st['left_idx']] == st['traits'][st['right_idx']]:
+                    # Double! flash and auto-apply
+                    st['phase'] = 'merge_flash'
+                    st['flash_t0'] = now
+                else:
+                    st['phase'] = 'choose'
+                    st['selected'] = 0
+        elif st['phase'] == 'merge_flash':
+            # After flash, apply and finish
+            if now - st.get('flash_t0', now) >= st.get('flash_dur', 500):
+                trait = st['traits'][st['left_idx']]
+                self.apply_trait_bonus(st['member_ix'], trait, double=True)
+                self.finish_trait_selection()
+
+    def finish_trait_selection(self):
+        # Return to party screen after finishing traits
+        self.mode = MODE_PARTY
+        self.party_mode = 'menu'
+        self.party_actions_index = 0
+        # clear state
+        self.trait_state = {}
+
+    def apply_trait_bonus(self, member_ix: int, trait: str, double: bool = False):
+        if not (0 <= member_ix < len(self.party.members)):
+            return
+        m = self.party.members[member_ix]
+        mult = 2 if double else 1
+        if trait == 'Quick':
+            m.agi += 1 * mult
+            self.log.add(f"{m.name} gains Quick (+{1*mult} AGI).")
+        elif trait == 'Strong':
+            m.str_ += 1 * mult
+            self.log.add(f"{m.name} gains Strong (+{1*mult} STR).")
+        elif trait == 'Focused':
+            m.max_mp += 2 * mult
+            m.mp += 2 * mult
+            self.log.add(f"{m.name} gains Focused (+{2*mult} MP).")
+        elif trait == 'Tough':
+            m.max_hp += 2 * mult
+            m.hp += 2 * mult
+            self.log.add(f"{m.name} gains Tough (+{2*mult} HP).")
+
+    def apply_fixed_starting_stats(self, c: "Character") -> None:
+        """Set fixed starting stats and HP/MP for a new character based on class.
+
+        VIT is derived from the class's starting HP and STR using
+        a simple heuristic to keep values in the same small scale
+        as the other fixed stats.
+        """
+        fixed = {
+            'Fighter': {'hp': 10, 'mp': 1, 'str_': 5, 'iq': 1, 'piety': 3, 'agi': 3, 'luck': 5},
+            'Rogue':   {'hp': 6,  'mp': 3, 'str_': 2, 'iq': 3, 'piety': 3, 'agi': 5, 'luck': 5},
+            'Priest':  {'hp': 8,  'mp': 4, 'str_': 3, 'iq': 3, 'piety': 5, 'agi': 1, 'luck': 5},
+            'Mage':    {'hp': 5,  'mp': 6, 'str_': 1, 'iq': 5, 'piety': 3, 'agi': 2, 'luck': 5},
+        }
+        s = fixed.get(c.cls)
+        if not s:
+            return
+        # Core ability scores
+        c.str_ = int(s['str_'])
+        c.iq = int(s['iq'])
+        c.piety = int(s['piety'])
+        c.agi = int(s['agi'])
+        c.luck = int(s['luck'])
+        # HP/MP
+        c.max_hp = int(s['hp']); c.hp = int(s['hp'])
+        c.max_mp = int(s['mp']); c.mp = int(s['mp'])
+        # Derive VIT from HP and STR (bounded 1..6 to match small fixed stat scale)
+        c.vit = self.compute_default_vit(c.cls, c.max_hp, c.str_)
+
+    def compute_default_vit(self, cls: str, hp: int, str_: int) -> int:
+        """Compute a default VIT from starting HP and STR.
+
+        Heuristic: ceil(hp/2) + floor(STR/3), clamped to 1..6.
+        This keeps VIT in line with the small fixed stat values while
+        reflecting both durability (HP) and physical toughness (STR).
+        """
+        try:
+            base = int(math.ceil(hp / 2.0))
+            adj = int(str_ // 3)
+            vit = base + adj
+            return max(1, min(6, vit))
+        except Exception:
+            return 3
 
     # --------------- Shop / Temple / Training ---------------
     def draw_shop(self):
@@ -5133,6 +5337,13 @@ class Game:
     def update(self):
         # progress typewriter for message log every frame
         self.log.update()
+        # Trait selection animation/update is self-contained and blocks other updates
+        if self.mode == MODE_TRAIT:
+            try:
+                self.update_trait()
+            except Exception:
+                pass
+            return
         # Smooth maze movement animation progression
         if self.mode in (MODE_MAZE, MODE_COMBAT_INTRO, MODE_SCENE) and self.move_active:
             now = pygame.time.get_ticks()
@@ -5338,6 +5549,8 @@ class Game:
                         self.victory_input(event)
                     elif self.mode == MODE_BATTLE:
                         self.battle_input(event)
+                    elif self.mode == MODE_TRAIT:
+                        self.trait_input(event)
 
             self.update()
 
@@ -5389,6 +5602,8 @@ class Game:
                     self.draw_victory()
                 elif self.mode == MODE_BATTLE:
                     self.draw_battle()
+                elif self.mode == MODE_TRAIT:
+                    self.draw_trait()
 
                 # Overlays that can appear on top
                 self.draw_save_feedback()
