@@ -2368,6 +2368,8 @@ class Game:
         # Persistent state: fog-of-war and level chests
         self.seen_by_level: Dict[int, set] = {}
         self.chests_state: Dict[int, List[Dict[str, Any]]] = {}
+        # Persistent state: doors unlocked per level (list of (x,y))
+        self.doors_unlocked: Dict[int, List[Tuple[int, int]]] = {}
 
         # Treasure popup
         self.treasure_popup_active: bool = False
@@ -2594,6 +2596,7 @@ class Game:
         # Serialize seen tiles per level and remaining chests per level
         seen_ser = {str(k): [[int(x), int(y)] for (x, y) in sorted(v)] for k, v in self.seen_by_level.items()}
         chests_ser = {str(k): list(v) for k, v in self.chests_state.items()}
+        doors_ser = {str(k): [[int(x), int(y)] for (x, y) in v] for k, v in self.doors_unlocked.items()}
         data = {
             "party": self.party.to_dict(),
             "pos": self.pos,
@@ -2601,6 +2604,7 @@ class Game:
             "level": self.level_ix,
             "seen": seen_ser,
             "chests": chests_ser,
+            "doors": doors_ser,
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -2643,6 +2647,23 @@ class Game:
                         ix = int(k)
                         if isinstance(v, list):
                             self.chests_state[ix] = list(v)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        # Doors
+        self.doors_unlocked = {}
+        try:
+            dd = data.get("doors", {})
+            if isinstance(dd, dict):
+                for k, v in dd.items():
+                    try:
+                        ix = int(k)
+                        lst: List[Tuple[int, int]] = []
+                        for pair in v:
+                            x, y = int(pair[0]), int(pair[1])
+                            lst.append((x, y))
+                        self.doors_unlocked[ix] = lst
                     except Exception:
                         continue
         except Exception:
@@ -2802,6 +2823,11 @@ class Game:
             else:
                 self.level_ix = 0
                 self.dun.ensure_level(0)
+                # Apply persistent per-floor state (opened chests, unlocked doors)
+                try:
+                    self.apply_level_state(self.level_ix)
+                except Exception:
+                    pass
                 self.pos = (2, 2)
                 self.facing = 1
                 self.mode = MODE_MAZE
@@ -3788,6 +3814,13 @@ class Game:
                 if self.party_has_rogue():
                     # Pick the lock automatically
                     self.grid()[ny][nx] = T_EMPTY
+                    # record unlocked door for persistence
+                    try:
+                        lst = self.doors_unlocked.setdefault(self.level_ix, [])
+                        if (nx, ny) not in lst:
+                            lst.append((nx, ny))
+                    except Exception:
+                        pass
                     self.log.add("You pick the lock.")
                     # then move forward
                     if not self.move_active:
@@ -3956,6 +3989,15 @@ class Game:
         saved = self.chests_state.get(ix)
         if isinstance(saved, list):
             lvl.chests = list(saved)
+        # Apply unlocked doors: convert those grid cells to empty
+        try:
+            doors = self.doors_unlocked.get(ix, [])
+            g = lvl.grid
+            for (dx, dy) in doors:
+                if 0 <= dy < len(g) and 0 <= dx < len(g[0]):
+                    g[dy][dx] = T_EMPTY
+        except Exception:
+            pass
 
     def party_has_rogue(self) -> bool:
         # Check active, alive members for Rogue class
@@ -4117,6 +4159,13 @@ class Game:
                         x, y = self.door_confirm_pos
                         if self.in_bounds(x, y):
                             self.grid()[y][x] = T_EMPTY
+                            # record unlocked door for persistence
+                            try:
+                                lst = self.doors_unlocked.setdefault(self.level_ix, [])
+                                if (x, y) not in lst:
+                                    lst.append((x, y))
+                            except Exception:
+                                pass
                         # attempt to move into it immediately
                         dx, dy = DIRS[self.facing]
                         if (self.pos[0] + dx, self.pos[1] + dy) == (x, y):
