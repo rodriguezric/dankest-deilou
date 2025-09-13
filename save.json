@@ -4,19 +4,19 @@
       {
         "name": "Ric",
         "cls": "Rogue",
-        "level": 4,
-        "str_": 11,
-        "iq": 8,
-        "piety": 10,
-        "vit": 11,
-        "agi": 7,
-        "luck": 10,
-        "max_hp": 16,
-        "hp": 16,
-        "max_mp": 0,
-        "mp": 0,
+        "level": 1,
+        "str_": 2,
+        "iq": 3,
+        "piety": 3,
+        "vit": 3,
+        "agi": 5,
+        "luck": 5,
+        "max_hp": 8,
+        "hp": 6,
+        "max_mp": 3,
+        "mp": 3,
         "ac": 10,
-        "exp": 44,
+        "exp": 60,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -24,83 +24,28 @@
           "armor_ac": 0,
           "weapon_id": "sword_basic",
           "armor_id": null,
-          "acc1_id": "boots",
+          "acc1_id": null,
           "acc2_id": null
         },
-        "inventory": []
+        "inventory": [],
+        "statuses": {}
       },
       {
         "name": "Atlas",
         "cls": "Fighter",
-        "level": 4,
-        "str_": 9,
-        "iq": 11,
-        "piety": 13,
-        "vit": 10,
-        "agi": 13,
-        "luck": 9,
-        "max_hp": 29,
-        "hp": 29,
+        "level": 1,
+        "str_": 5,
+        "iq": 1,
+        "piety": 3,
+        "vit": 6,
+        "agi": 3,
+        "luck": 5,
+        "max_hp": 14,
+        "hp": 10,
         "max_mp": 1,
         "mp": 1,
         "ac": 10,
-        "exp": 44,
-        "gold": 0,
-        "alive": true,
-        "equipment": {
-          "weapon_atk": 2,
-          "armor_ac": 0,
-          "weapon_id": "sword_basic",
-          "armor_id": null,
-          "acc1_id": "boots",
-          "acc2_id": null
-        },
-        "inventory": []
-      },
-      {
-        "name": "Buppi",
-        "cls": "Priest",
-        "level": 4,
-        "str_": 13,
-        "iq": 12,
-        "piety": 14,
-        "vit": 9,
-        "agi": 10,
-        "luck": 8,
-        "max_hp": 19,
-        "hp": 19,
-        "max_mp": 11,
-        "mp": 11,
-        "ac": 10,
-        "exp": 44,
-        "gold": 0,
-        "alive": true,
-        "equipment": {
-          "weapon_atk": 0,
-          "armor_ac": 0,
-          "weapon_id": null,
-          "armor_id": null,
-          "acc1_id": "helm",
-          "acc2_id": null
-        },
-        "inventory": []
-      },
-      {
-        "name": "Carmen",
-        "cls": "Mage",
-        "level": 2,
-        "str_": 13,
-        "iq": 10,
-        "piety": 12,
-        "vit": 6,
-        "agi": 14,
-        "luck": 6,
-        "max_hp": 10,
-        "hp": 10,
-        "max_mp": 9,
-        "mp": 9,
-        "ac": 10,
-        "exp": 15,
+        "exp": 60,
         "gold": 0,
         "alive": true,
         "equipment": {
@@ -111,23 +56,46 @@
           "acc1_id": null,
           "acc2_id": null
         },
-        "inventory": []
+        "inventory": [],
+        "statuses": {}
+      },
+      {
+        "name": "Buppi",
+        "cls": "Priest",
+        "level": 1,
+        "str_": 3,
+        "iq": 3,
+        "piety": 5,
+        "vit": 5,
+        "agi": 3,
+        "luck": 5,
+        "max_hp": 8,
+        "hp": 8,
+        "max_mp": 4,
+        "mp": 4,
+        "ac": 10,
+        "exp": 60,
+        "gold": 0,
+        "alive": true,
+        "equipment": {
+          "weapon_atk": 0,
+          "armor_ac": 0,
+          "weapon_id": null,
+          "armor_id": null,
+          "acc1_id": null,
+          "acc2_id": null
+        },
+        "inventory": [],
+        "statuses": {}
       }
     ],
     "active": [
       1,
       0,
-      2,
-      3
+      2
     ],
-    "gold": 173,
-    "inventory": [
-      "potion_small",
-      "potion_small",
-      "droplet",
-      "droplet",
-      "droplet"
-    ]
+    "gold": 26,
+    "inventory": []
   },
   "pos": [
     2,
@@ -174,10 +142,6 @@
         3
       ],
       [
-        1,
-        4
-      ],
-      [
         2,
         0
       ],
@@ -200,30 +164,6 @@
       [
         2,
         5
-      ],
-      [
-        2,
-        6
-      ],
-      [
-        2,
-        7
-      ],
-      [
-        2,
-        8
-      ],
-      [
-        2,
-        9
-      ],
-      [
-        2,
-        10
-      ],
-      [
-        2,
-        11
       ],
       [
         3,
@@ -250,38 +190,6 @@
         5
       ],
       [
-        3,
-        6
-      ],
-      [
-        3,
-        7
-      ],
-      [
-        3,
-        8
-      ],
-      [
-        3,
-        9
-      ],
-      [
-        3,
-        10
-      ],
-      [
-        3,
-        11
-      ],
-      [
-        3,
-        12
-      ],
-      [
-        3,
-        13
-      ],
-      [
         4,
         0
       ],
@@ -306,30 +214,6 @@
         5
       ],
       [
-        4,
-        6
-      ],
-      [
-        4,
-        7
-      ],
-      [
-        4,
-        8
-      ],
-      [
-        4,
-        9
-      ],
-      [
-        4,
-        10
-      ],
-      [
-        4,
-        11
-      ],
-      [
         5,
         1
       ],
@@ -348,26 +232,6 @@
       [
         5,
         5
-      ],
-      [
-        5,
-        6
-      ],
-      [
-        5,
-        7
-      ],
-      [
-        5,
-        8
-      ],
-      [
-        5,
-        9
-      ],
-      [
-        5,
-        10
       ],
       [
         6,
@@ -390,26 +254,6 @@
         5
       ],
       [
-        6,
-        6
-      ],
-      [
-        6,
-        7
-      ],
-      [
-        6,
-        8
-      ],
-      [
-        6,
-        9
-      ],
-      [
-        6,
-        10
-      ],
-      [
         7,
         1
       ],
@@ -428,26 +272,6 @@
       [
         7,
         5
-      ],
-      [
-        7,
-        6
-      ],
-      [
-        7,
-        7
-      ],
-      [
-        7,
-        8
-      ],
-      [
-        7,
-        9
-      ],
-      [
-        7,
-        10
       ],
       [
         8,
@@ -470,18 +294,6 @@
         5
       ],
       [
-        8,
-        7
-      ],
-      [
-        8,
-        8
-      ],
-      [
-        8,
-        9
-      ],
-      [
         9,
         1
       ],
@@ -500,18 +312,6 @@
       [
         9,
         5
-      ],
-      [
-        9,
-        7
-      ],
-      [
-        9,
-        8
-      ],
-      [
-        9,
-        9
       ],
       [
         10,
@@ -534,10 +334,6 @@
         5
       ],
       [
-        10,
-        8
-      ],
-      [
         11,
         1
       ],
@@ -556,10 +352,6 @@
       [
         11,
         5
-      ],
-      [
-        11,
-        8
       ],
       [
         12,
@@ -700,10 +492,6 @@
       [
         17,
         6
-      ],
-      [
-        18,
-        1
       ],
       [
         18,
@@ -768,6 +556,13 @@
     ]
   },
   "chests": {
-    "0": []
-  }
+    "0": [
+      {
+        "x": 3,
+        "y": 19,
+        "iid": "boots"
+      }
+    ]
+  },
+  "doors": {}
 }

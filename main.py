@@ -423,20 +423,88 @@ class Enemy:
     statuses: Dict[str, int] = field(default_factory=dict)
 
     @staticmethod
-    def from_base(base: Dict[str, Any]):
+    def from_base(base: Dict[str, Any], floor_num: int = 1):
+        """Create an Enemy from base data.
+
+        Supports legacy schema (hp_low/hp_high/ac/atk_low/atk_high/agi/exp)
+        and new schema using archetype + tier. Gold and drops pass through.
+        """
+        # Common fields
+        eid = base.get("id", base.get("name", "monster").lower().replace(' ', '_'))
+        name = base.get("name", "Monster")
+        gold_low = int(base.get("gold_low", 0))
+        gold_high = int(base.get("gold_high", 0))
+        drops = list(base.get("drops", [])) if isinstance(base.get("drops", []), list) else []
+
+        # If archetype present, derive combat stats from archetype/tier and floor
+        arch = base.get("archetype", base.get("archtype"))
+        tier = str(base.get("tier", "mob")).lower()
+        if arch:
+            L = max(1, int(floor_num))
+            archetype = str(arch).lower()
+            # Estimate player frontliner HP for damage calibration
+            hp_front = 10 + 4 * (L - 1)
+            dmg_avg = max(1, int(round(0.25 * hp_front)))
+            # Helpers
+            def band(avg: int, lo_mult=0.6, hi_mult=1.4):
+                lo = max(1, int(round(avg * lo_mult)))
+                hi = max(lo + 1, int(round(avg * hi_mult)))
+                return lo, hi
+            # Base archetype stats
+            if archetype in ("bruiser", "fighter"):
+                hp = 10 + 6 * (L - 1)
+                ac = min(12, 8 + (L // 2))
+                agi = 4 + (L // 2)
+                atk_low, atk_high = band(dmg_avg, 0.7, 1.4)
+            elif archetype in ("skirmisher", "rogue"):
+                hp = 6 + 4 * (L - 1)
+                ac = min(11, 8 + (L // 3))
+                agi = 6 + L
+                atk_low, atk_high = band(max(1, dmg_avg - 1), 0.6, 1.5)
+            elif archetype in ("acolyte", "priest"):
+                hp = 8 + 5 * (L - 1)
+                ac = 8 + (L // 3)
+                agi = 5 + (L // 2)
+                atk_low, atk_high = band(max(1, int(round(dmg_avg * 0.6))), 0.6, 1.3)
+            elif archetype in ("adept", "mage"):
+                hp = 5 + 3 * (L - 1)
+                ac = 7 + (L // 3)
+                agi = 5 + (L // 2)
+                atk_low, atk_high = band(max(1, int(round(dmg_avg * 0.9))), 0.6, 1.6)
+            else:
+                # Default generic
+                hp = 8 + 5 * (L - 1)
+                ac = 8 + (L // 3)
+                agi = 5 + (L // 2)
+                atk_low, atk_high = band(dmg_avg)
+            # Tier adjustments
+            if tier == 'elite':
+                hp = int(hp * 1.5)
+                ac = min(13, ac + 1)
+                atk_low = int(round(atk_low * 1.1)); atk_high = int(round(atk_high * 1.15))
+            elif tier == 'boss':
+                hp = int(hp * 2.0)
+                ac = min(14, ac + 2)
+                atk_low = int(round(atk_low * 1.25)); atk_high = int(round(atk_high * 1.35))
+            # Build enemy
+            return Enemy(
+                id=eid, name=name, hp=int(hp), ac=int(ac), atk_low=int(atk_low), atk_high=int(atk_high),
+                exp=0, gold_low=gold_low, gold_high=gold_high, agi=int(agi), drops=drops,
+            )
+
+        # Legacy schema fallback
         hp = random.randint(base.get("hp_low", 6), base.get("hp_high", 10))
         return Enemy(
-            id=base.get("id", base.get("name", "monster").lower().replace(' ', '_')),
-            name=base.get("name", "Monster"),
+            id=eid, name=name,
             hp=hp,
             ac=int(base.get("ac", 8)),
             atk_low=int(base.get("atk_low", 1)),
             atk_high=int(base.get("atk_high", 4)),
             exp=int(base.get("exp", 10)),
-            gold_low=int(base.get("gold_low", 1)),
-            gold_high=int(base.get("gold_high", 8)),
+            gold_low=gold_low,
+            gold_high=gold_high,
             agi=int(base.get("agi", random.randint(5, 12))),
-            drops=list(base.get("drops", [])) if isinstance(base.get("drops", []), list) else [],
+            drops=drops,
         )
 
 
@@ -1158,6 +1226,8 @@ class Battle:
         self.monsters_by_id = monsters_by_id
         self.skills_config = skills_config
         self.sfx = sfx
+        # Battle context (set by Game on start)
+        self.floor_num: int = 1
         self.enemies: List[Enemy] = []
         self.turn_index = 0  # kept for compatibility in some calls
         self.turn_order: List[Tuple[str, int]] = []  # list of (side, index) where index is party global index or enemy index
@@ -1298,13 +1368,14 @@ class Battle:
             self._status_dec(side, ix, 'weak', 1)
         return False
 
-    def start_random(self, allowed: Optional[List[str]] = None, group: Tuple[int, int] = (1, 3)):
+    def start_random(self, allowed: Optional[List[str]] = None, group: Tuple[int, int] = (1, 3), floor_num: int = 1):
         # Build enemy group from allowed ids and monster base data
         ids = [k for k in (allowed or list(self.monsters_by_id.keys())) if k in self.monsters_by_id]
         nmin, nmax = group
         count = random.randint(max(1, nmin), max(nmin, nmax))
         chosen = [random.choice(ids) for _ in range(count)] if ids else []
-        self.enemies = [Enemy.from_base(self.monsters_by_id[cid]) for cid in chosen]
+        fn = max(1, int(floor_num))
+        self.enemies = [Enemy.from_base(self.monsters_by_id[cid], floor_num=fn) for cid in chosen]
         # No ambush message; battle UI/intro handles the transition
         self.build_turn_order()
         self.turn_pos = 0
@@ -2091,7 +2162,6 @@ class Battle:
             # try again after animations complete
             self.next_after_anim = {'actor_side': 'enemy'}  # dummy to keep loop flowing
             return
-        total_exp = random.randint(20, 60)
         # Gold based on each enemy's range (allows per-monster zero gold)
         total_gold = 0
         try:
@@ -2121,9 +2191,31 @@ class Battle:
                 e = self.enemies[i] if 0 <= i < len(self.enemies) else None
                 if e and e.hp <= 0:
                     loot_counts[iid] = loot_counts.get(iid, 0) + 1
-        alive = self.party.alive_active_members()
-        for m in alive:
-            m.exp += total_exp // max(1, len(alive))
+        # Compute EXP awards per character based on floor vs character level.
+        floor_num = max(1, int(getattr(self, 'floor_num', 1)))
+        awards: Dict[int, int] = {}
+        before: Dict[int, int] = {}
+        after: Dict[int, int] = {}
+        # Count non-escaped defeated enemies for weighting (each enemy awards the same formula)
+        defeated_count = sum(1 for i, e in enumerate(self.enemies) if (i not in self.escaped_enemies) and getattr(e, 'hp', 0) <= 0)
+        defeated_count = max(0, defeated_count)
+        # For each alive active member, compute per-enemy award and sum
+        for gi in self.party.active:
+            if not (0 <= gi < len(self.party.members)):
+                continue
+            m = self.party.members[gi]
+            if not (m.alive and m.hp > 0):
+                continue
+            before_exp = int(getattr(m, 'exp', 0))
+            per_enemy = int(math.floor(10.0 * (floor_num / max(1.0, float(m.level)))))
+            total_award = max(0, per_enemy * defeated_count)
+            # Cap the character's stored EXP to 100 total
+            new_exp = min(100, before_exp + total_award)
+            gain = max(0, new_exp - before_exp)
+            m.exp = new_exp
+            awards[gi] = gain
+            before[gi] = before_exp
+            after[gi] = new_exp
         # Gold now goes to the party pool
         self.party.gold += total_gold
         # Award items to party inventory
@@ -2132,7 +2224,9 @@ class Battle:
                 self.party.inventory.append(iid)
         # Do not log battle results here; show them only on the Victory screen
         # Record for victory screen
-        self.victory_exp = total_exp
+        self.victory_exp_awards = awards
+        self.victory_exp_before = before
+        self.victory_exp_after = after
         self.victory_gold = total_gold
         # Also record loot for Game to display
         self.victory_loot = loot_counts
@@ -3888,7 +3982,9 @@ class Game:
         lvl = self.dun.levels[self.level_ix]
         allowed = lvl.encounter_monsters or list(self.monsters_by_id.keys())
         group = getattr(lvl, 'encounter_group', (1,3))
-        self.in_battle.start_random(allowed=allowed, group=group)
+        floor_num = int(self.level_ix) + 1
+        self.in_battle.floor_num = floor_num
+        self.in_battle.start_random(allowed=allowed, group=group, floor_num=floor_num)
         # Begin transition on the labyrinth view first
         self.mode = MODE_COMBAT_INTRO
         self.combat_intro_active = True
@@ -5335,56 +5431,112 @@ class Game:
     def draw_victory(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((10, 14, 10))
-        # Panel
-        pad_x, pad_y = 14, 12
+        pad_x, pad_y = 16, 14
         title = "Victory!"
-        # Prepare lines from current state (fallback if not set)
-        if not self.victory_text_lines:
-            self.victory_text_lines = [
-                f"EXP gained: {self.victory_info.get('exp', 0)}",
-                f"Gold found: {self.victory_info.get('gold', 0)}g",
-            ]
-        lines = [title] + self.victory_text_lines
         text_h = self.r.font.get_height()
-        w = max(self.r.font_big.size(lines[0])[0], max(self.r.font.size(l)[0] for l in lines[1:])) + pad_x * 2
-        h = text_h * (len(lines) + 2) + pad_y * 2 + 12
+        # Spacing for rows and bars
+        name_gap = 6      # space between name and bar
+        row_gap = 14      # extra space between character rows
+        bar_h = 10        # bar height
+        row_h = text_h + name_gap + bar_h + row_gap
+        title_gap = 18    # extra space between title and first character row
+        # Compute panel size to fit member rows + gold/loot lines
+        rows = max(1, len(self.party.members))
+        panel_w = WIDTH * 2 // 3
+        panel_h = pad_y * 2 + text_h + title_gap + rows * row_h + text_h * 2
+        w = min(WIDTH - 80, panel_w)
+        h = min(VIEW_H - 60, panel_h)
         x = WIDTH // 2 - w // 2
         y = VIEW_H // 2 - h // 2
         rect = pygame.Rect(x, y, w, h)
         pygame.draw.rect(view, (16, 24, 16), rect)
         pygame.draw.rect(view, YELLOW, rect, 2)
-        # Title
         self.r.text_big(view, title, (x + pad_x, y + pad_y), YELLOW)
 
-        # Typewriter effect for result lines (sequential across lines)
+        # Bars setup
+        bar_x = x + pad_x
+        cy = y + pad_y + text_h + title_gap
+        bar_w = w - pad_x * 2
+        awards = self.victory_info.get('awards', {}) or {}
+        before = self.victory_info.get('before', {}) or {}
+        after = self.victory_info.get('after', {}) or {}
+        # Animate bars from before -> after
         now = pygame.time.get_ticks()
-        if not self.victory_done:
-            elapsed = max(0, now - self.victory_type_t0)
-            target = int(self.victory_type_cps * (elapsed / 1000.0))
-            prev_chars = self.victory_type_chars
-            self.victory_type_chars = max(self.victory_type_chars, target)
-            # typer sfx during reveal (throttled)
-            if self.victory_type_chars > prev_chars and now - self.victory_type_last_sfx >= 50:
+        t0 = getattr(self, 'victory_anim_t0', now)
+        dur = max(1, int(getattr(self, 'victory_anim_dur', 1200)))
+        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+        all_done = True
+        for gi, m in enumerate(self.party.members):
+            # Name
+            self.r.text(view, m.name, (bar_x, cy - 2))
+            # Determine exp values
+            b = int(before.get(gi, m.exp))  # fallback to current if not recorded
+            a = int(after.get(gi, m.exp))
+            cur = int(round(b + (a - b) * p))
+            if cur < a:
+                all_done = False
+            # Draw bar background
+            by = cy + text_h + name_gap
+            bg_rect = pygame.Rect(bar_x, by, bar_w, bar_h)
+            pygame.draw.rect(view, (22, 30, 22), bg_rect)
+            pygame.draw.rect(view, (60, 80, 60), bg_rect, 1)
+            # Fill percentage
+            frac = max(0.0, min(1.0, cur / 100.0))
+            fill_w = int(bar_w * frac)
+            if fill_w > 0:
+                color = (220, 200, 80)
+                # Flash if full
+                if a >= 100 and cur >= 100:
+                    if (now // 120) % 2 == 0:
+                        color = (255, 255, 255)
+                pygame.draw.rect(view, color, (bar_x, by, fill_w, bar_h))
+            # No numeric labels on EXP bars per request
+            cy += row_h
+
+        self.victory_done = all_done
+        # Footer: gold and loot
+        gold = int(self.victory_info.get('gold', 0))
+        loot = self.victory_info.get('loot', {}) or {}
+        # Ensure footer text fits inside panel width; truncate with ellipsis if needed
+        def fit_text(s: str, max_w: int) -> str:
+            try:
+                # fast path
+                if self.r.font_small.size(s)[0] <= max_w:
+                    return s
+            except Exception:
+                return s
+            ell = "…"
+            # binary chop length
+            lo, hi = 0, len(s)
+            best = ""
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                cand = s[:mid] + ell
                 try:
-                    self.sfx.play('typer', 0.35)
+                    wtest = self.r.font_small.size(cand)[0]
                 except Exception:
-                    pass
-                self.victory_type_last_sfx = now
+                    wtest = 0
+                if wtest <= max_w:
+                    best = cand; lo = mid + 1
+                else:
+                    hi = mid - 1
+            return best or s[:max(0, len(s)-1)]
 
-        total = sum(len(s) for s in self.victory_text_lines)
-        shown = min(total, self.victory_type_chars)
-        cy = y + pad_y + text_h + 8
-        remaining = shown
-        for ln in self.victory_text_lines:
-            n = min(len(ln), max(0, remaining))
-            text = ln[:n]
-            self.r.text(view, text, (x + pad_x, cy))
-            remaining -= n
-            cy += text_h
-
-        self.victory_done = (shown >= total)
-        if self.victory_done:
-            self.r.text_small(view, "Enter: Continue", (x + pad_x, cy + 8), LIGHT)
+        footer_y = y + h - pad_y - text_h
+        gold_line = f"Gold found: {gold}g"
+        max_line_w = w - pad_x * 2
+        gold_line = fit_text(gold_line, max_line_w)
+        self.r.text_small(view, gold_line, (x + pad_x, footer_y))
+        # Optionally draw loot on a separate clipped line above gold to keep gold visible
+        if loot:
+            parts = []
+            for iid, cnt in loot.items():
+                name = self.items_by_id.get(iid, {}).get('name', iid)
+                parts.append(f"{name} x{cnt}")
+            loot_line = "Items: " + ", ".join(parts)
+            loot_line = fit_text(loot_line, max_line_w)
+            self.r.text_small(view, loot_line, (x + pad_x, footer_y - text_h - 4))
+        # No explicit continue prompt; any key still returns to the labyrinth
 
     def draw_defeat(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -5420,13 +5572,8 @@ class Game:
     def victory_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
-                # If typewriter not finished, reveal instantly; otherwise continue
-                if not self.victory_done:
-                    self.victory_type_chars = sum(len(s) for s in self.victory_text_lines)
-                    self.victory_done = True
-                else:
-                    # Return to labyrinth after victory
-                    self.mode = MODE_MAZE
+                # Return to labyrinth after victory
+                self.mode = MODE_MAZE
         # no-op additional rendering in victory input
 
     # --------------- Gold helpers ---------------
@@ -5598,26 +5745,22 @@ class Game:
             # Only react to battle end states when battle_over is set
             if self.in_battle.battle_over:
                 if self.in_battle.result == 'victory':
-                    # Capture victory results for display
-                    exp = getattr(self.in_battle, 'victory_exp', 0)
+                    # Capture victory results for display (per-character EXP awards were computed in battle)
                     gold = getattr(self.in_battle, 'victory_gold', 0)
                     loot = getattr(self.in_battle, 'victory_loot', {}) or {}
-                    self.victory_info = {'exp': exp, 'gold': gold, 'loot': loot}
+                    self.victory_info = {
+                        'gold': gold,
+                        'loot': loot,
+                        'awards': getattr(self.in_battle, 'victory_exp_awards', {}),
+                        'before': getattr(self.in_battle, 'victory_exp_before', {}),
+                        'after': getattr(self.in_battle, 'victory_exp_after', {}),
+                    }
                     # Reset threat after combat
                     self.threat = 0
                     self.threat_full_steps = 0
-                    # Prepare typewriter state for victory screen
-                    lines = [f"EXP gained: {exp}", f"Gold found: {gold}g"]
-                    if loot:
-                        # Build a compact item list using item names
-                        parts = []
-                        for iid, cnt in loot.items():
-                            name = self.items_by_id.get(iid, {}).get('name', iid)
-                            parts.append(f"{name} x{cnt}")
-                        lines.append("Items found: " + ", ".join(parts))
-                    self.victory_text_lines = lines
-                    self.victory_type_t0 = pygame.time.get_ticks()
-                    self.victory_type_chars = 0
+                    # Init bar animation
+                    self.victory_anim_t0 = pygame.time.get_ticks()
+                    self.victory_anim_dur = 1200
                     self.victory_done = False
                     self.mode = MODE_VICTORY
                 elif self.in_battle.result == 'fled':
