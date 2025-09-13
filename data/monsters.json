@@ -2,15 +2,10 @@
   {
     "id": "giant_rat",
     "name": "Giant Rat",
-    "hp_low": 6,
-    "hp_high": 10,
-    "ac": 8,
-    "atk_low": 1,
-    "atk_high": 4,
-    "exp": 12,
+    "archetype": "skirmisher",
+    "tier": "mob",
     "gold_low": 0,
     "gold_high": 0,
-    "agi": 7,
     "drops": [
       { "iid": "cheese", "chance": 0.3 }
     ]
@@ -18,54 +13,34 @@
   {
     "id": "goblin",
     "name": "Goblin",
-    "hp_low": 8,
-    "hp_high": 14,
-    "ac": 7,
-    "atk_low": 1,
-    "atk_high": 6,
-    "exp": 20,
+    "archetype": "skirmisher",
+    "tier": "mob",
     "gold_low": 2,
-    "gold_high": 12,
-    "agi": 8
+    "gold_high": 12
   },
   {
     "id": "skeleton",
     "name": "Skeleton",
-    "hp_low": 10,
-    "hp_high": 16,
-    "ac": 6,
-    "atk_low": 1,
-    "atk_high": 8,
-    "exp": 28,
+    "archetype": "bruiser",
+    "tier": "mob",
     "gold_low": 4,
-    "gold_high": 18,
-    "agi": 9
+    "gold_high": 18
   },
   {
     "id": "kobold",
     "name": "Kobold",
-    "hp_low": 8,
-    "hp_high": 12,
-    "ac": 7,
-    "atk_low": 1,
-    "atk_high": 6,
-    "exp": 18,
+    "archetype": "skirmisher",
+    "tier": "mob",
     "gold_low": 2,
-    "gold_high": 10,
-    "agi": 9
+    "gold_high": 10
   },
   {
     "id": "slime",
     "name": "Slime",
-    "hp_low": 6,
-    "hp_high": 12,
-    "ac": 11,
-    "atk_low": 1,
-    "atk_high": 3,
-    "exp": 14,
+    "archetype": "acolyte",
+    "tier": "mob",
     "gold_low": 0,
     "gold_high": 0,
-    "agi": 5,
     "drops": [
       { "iid": "droplet", "chance": 0.1 }
     ]
