@@ -1,0 +1,13 @@
+[
+  {
+    "id": "guide",
+    "name": "The Guide",
+    "voice": "human_man",
+    "desc": "A weary traveler in a tattered cloak. His eyes know these halls.",
+    "talk": [
+      "Beware the Labyrinth. Even simple foes can overwhelm the unprepared.",
+      "Keep your healer close and watch your footing—stuns and blinds can end a run.",
+      "When your party grows stronger than a floor, you can move freely—but do not grow complacent."
+    ]
+  }
+]

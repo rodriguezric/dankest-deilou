@@ -71,6 +71,7 @@ MODE_COMBAT_INTRO = "COMBAT_INTRO"
 MODE_EQUIP = "EQUIP"
 MODE_SCENE = "SCENE"  # town<->labyrinth transition
 MODE_TRAIT = "TRAIT"   # post-creation trait selection
+MODE_DIALOG = "DIALOG" # NPC dialog
 
 # Temple costs
 TEMPLE_HEAL_PARTY_COST = 30
@@ -218,6 +219,8 @@ class SfxManager:
         # If mixer failed to init in MusicManager, we still try; ignore errors.
         self.enabled = pygame.mixer.get_init() is not None
         self.sounds: Dict[str, Optional[pygame.mixer.Sound]] = {}
+        self._last_play_ms: Dict[str, int] = {}
+        self._len_ms_cache: Dict[str, int] = {}
         self._load_defaults()
 
     def _find_file(self, base: str) -> Optional[str]:
@@ -251,6 +254,7 @@ class SfxManager:
             'enemy_hurt': self._load('enemy_hurt', 'sfx_enemy_hurt'),
             'heal': self._load('heal', 'sfx_heal'),
             'typer': self._load('typer', 'sfx_typer'),
+            'voice_human_man': self._load('voice_human_man', 'sfx_voice_human_man'),
         }
 
     def play(self, key: str, volume: float = 1.0):
@@ -260,10 +264,26 @@ class SfxManager:
         if snd is None:
             return
         try:
+            # Avoid overlapping voice ticks: if a voice clip is still playing, skip
+            if key.startswith('voice_'):
+                now = pygame.time.get_ticks()
+                ln = self._len_ms_cache.get(key)
+                if ln is None:
+                    try:
+                        ln = int(snd.get_length() * 1000)
+                    except Exception:
+                        ln = 120
+                    self._len_ms_cache[key] = ln
+                last = self._last_play_ms.get(key, -10**9)
+                if now - last < max(60, ln):
+                    return
             old = snd.get_volume()
             snd.set_volume(max(0.0, min(1.0, volume)))
-            snd.play()
+            ch = snd.play()
             snd.set_volume(old)
+            if key.startswith('voice_'):
+                # Record start time to throttle subsequent plays
+                self._last_play_ms[key] = pygame.time.get_ticks()
         except Exception:
             pass
 
@@ -538,6 +558,8 @@ class Level:
     encounter_group: Tuple[int, int] = (1, 3)
     # Treasure chests on this level: list of {'x':int,'y':int,'iid':str}
     chests: List[Dict[str, Any]] = field(default_factory=list)
+    # NPC nodes on this level: list of {'x':int,'y':int,'id':str}
+    npcs: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class Dungeon:
@@ -599,6 +621,19 @@ class Dungeon:
                         except Exception:
                             continue
                     lvl.chests = clean
+                # NPCs
+                npcs = data.get('npcs', [])
+                if isinstance(npcs, list):
+                    clean = []
+                    for n in npcs:
+                        try:
+                            x = int(n.get('x'))
+                            y = int(n.get('y'))
+                            nid = str(n.get('id'))
+                            clean.append({'x': x, 'y': y, 'id': nid})
+                        except Exception:
+                            continue
+                    lvl.npcs = clean
         except Exception:
             pass
         if ix == 0 and not lvl.town_portal:
@@ -707,7 +742,7 @@ class Renderer:
                      world_shift_tiles: Tuple[float, float] = (0.0, 0.0), player_bob_px: int = 0,
                      player_frac: Tuple[float, float] = (0.0, 0.0),
                      visible_tiles: set = None, seen_tiles: set = None, apply_fov: bool = False,
-                     chests: List[Dict[str, Any]] = None):
+                     chests: List[Dict[str, Any]] = None, npcs: List[Dict[str, Any]] = None):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 22))
         px, py = pos
@@ -755,6 +790,28 @@ class Renderer:
                     rect = pygame.Rect(sx + cell//4, sy + cell//3, cell//2, cell//3)
                     pygame.draw.rect(view, (120, 90, 40), rect)
                     pygame.draw.rect(view, (80, 60, 30), rect, 2)
+        # Draw NPCs as small cyan dots with outline and initial, within the radius window
+        if npcs:
+            for n in npcs:
+                try:
+                    nx, ny = int(n.get('x', -9999)), int(n.get('y', -9999))
+                except Exception:
+                    continue
+                if py - radius <= ny <= py + radius and px - radius <= nx <= px + radius:
+                    sx = ox + (nx - (px - radius)) * cell + int(shift_px[0])
+                    sy = oy + (ny - (py - radius)) * cell + int(shift_px[1])
+                    cx = sx + cell // 2; cy = sy + cell // 2
+                    r = max(4, cell // 5)
+                    # outline
+                    pygame.draw.circle(view, (10, 10, 14), (cx, cy), r + 2)
+                    # fill
+                    pygame.draw.circle(view, (60, 200, 200), (cx, cy), r)
+                    # initial
+                    try:
+                        ch = str(n.get('id', '?'))[:1].upper()
+                        self.text_small(view, ch, (cx - 3, cy - 6), (0,0,0))
+                    except Exception:
+                        pass
         # player marker
         pxs = ox + radius * cell + cell // 2
         pys = oy + radius * cell + cell // 2 + int(player_bob_px)
@@ -2480,6 +2537,18 @@ class Game:
         self.door_confirm_active: bool = False
         self.door_confirm_index: int = 1  # 0 Yes, 1 No
         self.door_confirm_pos: Optional[Tuple[int, int]] = None
+        # Dialog state
+        self.dialog_active: bool = False
+        self.dialog_npc_id: Optional[str] = None
+        self.dialog_phase: str = 'root'  # 'root' | 'talk'
+        self.dialog_menu_index: int = 0
+        self.dialog_text: List[str] = []
+        self.dialog_type_t0: int = 0
+        self.dialog_type_chars: int = 0
+        self.dialog_line_ix: int = 0
+        self.dialog_desc: str = ''
+        self.dialog_typer_prev_chars: int = 0
+        self.dialog_desc_typing: bool = False
 
     def party_average_level(self) -> float:
         # Prefer alive active members; fall back to alive members; else all members; default 1.0
@@ -2525,6 +2594,12 @@ class Game:
         # Skills
         skills = self.load_json(os.path.join('data', 'skills.json'), {})
         self.skills_config = skills.get('classes', {})
+        # NPCs
+        try:
+            npcs = self.load_json(os.path.join('data', 'npcs.json'), [])
+            self.npcs_by_id: Dict[str, Dict[str, Any]] = {n.get('id'): n for n in npcs if n.get('id')}
+        except Exception:
+            self.npcs_by_id = {}
 
     # --------------- Audio / Music ---------------
     def on_mode_changed(self, old_mode: Optional[str], new_mode: str):
@@ -4019,7 +4094,7 @@ class Game:
         lvl = self.dun.levels[self.level_ix]
         self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix, shift_tiles, bob_px, frac,
                             visible_tiles=visible_tiles, seen_tiles=seen, apply_fov=False,
-                            chests=getattr(lvl, 'chests', []))
+                            chests=getattr(lvl, 'chests', []), npcs=getattr(lvl, 'npcs', []))
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Removed on-screen controls display for a cleaner labyrinth view
         # Draw threat flash (when meter is full) and indicator (top-right)
@@ -4214,6 +4289,199 @@ class Game:
         self.r.text_big(view, title, (x + pad_x, y + pad_y), YELLOW)
         self.r.text(view, item, (x + pad_x, y + pad_y + text_h + 6))
         self.r.text_small(view, "Enter/Esc: Close", (x + pad_x, y + pad_y + text_h * 2 + 10), LIGHT)
+
+    # --------------- Dialog ---------------
+    def start_dialog(self, npc_id: str):
+        self.dialog_active = True
+        self.dialog_npc_id = npc_id
+        self.dialog_phase = 'root'
+        self.dialog_menu_index = 0
+        # Prepare typewriter for description
+        npc = (getattr(self, 'npcs_by_id', {}) or {}).get(npc_id, {})
+        desc = str(npc.get('desc', npc.get('name', 'Someone stands here.')))
+        self.dialog_desc = desc
+        self.dialog_text = [desc]
+        self.dialog_type_t0 = pygame.time.get_ticks()
+        self.dialog_type_chars = 0
+        self.dialog_typer_prev_chars = 0
+        self.dialog_desc_typing = True  # on first open, typewriter for description
+        self.dialog_line_ix = 0
+        self.mode = MODE_DIALOG
+
+    def dialog_input(self, event):
+        if event.type != pygame.KEYDOWN:
+            return
+        if self.dialog_phase == 'root':
+            opts = ['Talk', 'Item', 'Leave']
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.dialog_menu_index = (self.dialog_menu_index - 1) % len(opts)
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.dialog_menu_index = (self.dialog_menu_index + 1) % len(opts)
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                choice = self.dialog_menu_index
+                if choice == 0:  # Talk
+                    npc = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {})
+                    lines = npc.get('talk', ["..."])
+                    self.dialog_text = list(lines) if isinstance(lines, list) else [str(lines)]
+                    self.dialog_phase = 'talk'
+                    self.dialog_line_ix = 0
+                    self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
+                    self.dialog_typer_prev_chars = 0
+                elif choice == 1:  # Item (simple placeholder)
+                    self.dialog_text = ["You offer an item, but they shake their head."]
+                    self.dialog_phase = 'talk'
+                    self.dialog_line_ix = 0
+                    self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
+                    self.dialog_typer_prev_chars = 0
+                else:  # Leave
+                    self.dialog_active = False
+                    self.mode = MODE_MAZE
+            elif event.key == pygame.K_ESCAPE:
+                self.dialog_active = False
+                self.mode = MODE_MAZE
+        elif self.dialog_phase == 'talk':
+            # Enter advances typewriter/line; Esc leaves
+            if event.key == pygame.K_ESCAPE:
+                self.dialog_active = False
+                self.mode = MODE_MAZE
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                # Compute whether current line is fully revealed
+                now = pygame.time.get_ticks()
+                line = str(self.dialog_text[self.dialog_line_ix]) if (0 <= self.dialog_line_ix < len(self.dialog_text)) else ''
+                cps = 40.0
+                shown = int(cps * (max(0, now - self.dialog_type_t0) / 1000.0))
+                if shown < len(line):
+                    # Fast-forward to full line
+                    needed_ms = int((len(line) / cps) * 1000.0)
+                    self.dialog_type_t0 = now - needed_ms
+                    self.dialog_typer_prev_chars = len(line)
+                else:
+                    # Advance to next line or finish
+                    self.dialog_line_ix += 1
+                    if self.dialog_line_ix >= len(self.dialog_text):
+                        # Done talking: return to root with description restored (no typewriter)
+                        self.dialog_phase = 'root'
+                        self.dialog_menu_index = 0
+                        self.dialog_text = [self.dialog_desc]
+                        self.dialog_line_ix = 0
+                        self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
+                        self.dialog_typer_prev_chars = 0
+                        self.dialog_desc_typing = False
+                    else:
+                        self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
+                        self.dialog_typer_prev_chars = 0
+
+    def _wrap_text(self, text: str, max_w: int) -> List[str]:
+        # Simple word wrapping using main font metrics
+        words = text.split(' ')
+        lines: List[str] = []
+        cur = ''
+        for w in words:
+            test = w if not cur else cur + ' ' + w
+            try:
+                tw = self.r.font.size(test)[0]
+            except Exception:
+                tw = len(test) * 8
+            if tw <= max_w:
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        return lines
+
+    def draw_dialog(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        # Dim background
+        s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        s.fill((0, 0, 0, 180))
+        view.blit(s, (0, 0))
+        pad_x, pad_y = 16, 12
+        title = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {}).get('name', 'Someone')
+        text_h = self.r.font.get_height()
+        # Panel: top quarter of the view
+        top_h = max(80, VIEW_H // 4)
+        x = 20; y = 10; w = WIDTH - 40; h = top_h
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(view, (18, 18, 26), rect)
+        pygame.draw.rect(view, YELLOW, rect, 2)
+        self.r.text_big(view, title, (x + pad_x, y + pad_y), YELLOW)
+        # Typewriter for current line only
+        now = pygame.time.get_ticks()
+        elapsed = max(0, now - self.dialog_type_t0)
+        cps = 40.0
+        shown = int(cps * (elapsed / 1000.0))
+        # Clamp to line length to avoid runaway increments
+        line = str(self.dialog_text[self.dialog_line_ix]) if (0 <= self.dialog_line_ix < len(self.dialog_text)) else ''
+        shown_clamped = min(shown, len(line))
+        self.dialog_type_chars = shown_clamped
+        # Voice tick per newly revealed character (talk phase only)
+        if self.dialog_phase == 'talk':
+            try:
+                prev = int(getattr(self, 'dialog_typer_prev_chars', 0))
+                if shown_clamped > prev:
+                    # Only tick once per frame for the most recently revealed character,
+                    # and only if it is a letter (skip spaces/punctuation)
+                    idx = shown_clamped - 1
+                    if 0 <= idx < len(line):
+                        ch = line[idx]
+                        if isinstance(ch, str) and ch.isalpha():
+                            voice_id = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {}).get('voice', 'human_man')
+                            key = f"voice_{voice_id}"
+                            vol = 0.18 + random.random() * 0.06
+                            if self.sfx and (self.sfx.sounds.get(key) or self.sfx.sounds.get('typer')):
+                                self.sfx.play(key if self.sfx.sounds.get(key) else 'typer', vol)
+                    self.dialog_typer_prev_chars = shown_clamped
+            except Exception:
+                pass
+        # Ensure description is shown whenever we are on the root menu
+        if self.dialog_phase == 'root':
+            try:
+                if self.dialog_text != [self.dialog_desc]:
+                    self.dialog_text = [self.dialog_desc]
+                    self.dialog_line_ix = 0
+                    if self.dialog_desc_typing:
+                        # Only typewriter when first stepping onto the NPC
+                        self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
+                        self.dialog_typer_prev_chars = 0
+                    else:
+                        # Show instantly otherwise
+                        self.dialog_type_t0 = 0; self.dialog_type_chars = 0
+            except Exception:
+                pass
+        # Determine text to show
+        line = str(self.dialog_text[self.dialog_line_ix]) if (0 <= self.dialog_line_ix < len(self.dialog_text)) else ''
+        # When in root and not typing, show full description instantly
+        display_len = len(line) if (self.dialog_phase == 'root' and not self.dialog_desc_typing) else shown_clamped
+        partial = line[:max(0, display_len)]
+        # Wrap inside panel
+        max_w = w - pad_x * 2
+        wrapped = self._wrap_text(partial, max_w)
+        name_text_gap = 16
+        cy = y + pad_y + text_h + name_text_gap
+        for ln in wrapped:
+            self.r.text(view, ln, (x + pad_x, cy))
+            cy += text_h
+        # Flashing prompt '>' when line complete
+        if shown_clamped >= len(line) and self.dialog_phase == 'talk':
+            if (now // 400) % 2 == 0:
+                self.r.text(view, '>', (x + w - pad_x - 14, y + h - pad_y - text_h), YELLOW)
+        # Menu below the window when in root phase
+        if self.dialog_phase == 'root':
+            opts = ['Talk', 'Item', 'Leave']
+            menu_y = y + h + 16
+            # Draw a simple list menu centered
+            tws = [self.r.font.size(o)[0] for o in opts]
+            mw = max(tws) if tws else 0
+            mx = WIDTH // 2 - (mw // 2)
+            for i, o in enumerate(opts):
+                is_sel = (i == self.dialog_menu_index)
+                color = YELLOW if is_sel else WHITE
+                prefix = '> ' if is_sel else '  '
+                self.r.text(view, prefix + o, (mx, menu_y), color)
+                menu_y += text_h + 6
 
     def draw_door_confirm(self):
         if not getattr(self, 'door_confirm_active', False):
@@ -5669,6 +5937,17 @@ class Game:
                             self.treasure_t0 = pygame.time.get_ticks()
                 except Exception:
                     pass
+                # NPC interaction when stepping onto an NPC node
+                try:
+                    lvl = self.dun.levels[self.level_ix]
+                    if hasattr(lvl, 'npcs') and isinstance(lvl.npcs, list):
+                        cx, cy = self.pos
+                        node = next((n for n in lvl.npcs if int(n.get('x', -1)) == cx and int(n.get('y', -1)) == cy), None)
+                        if node:
+                            self.start_dialog(str(node.get('id', '')))
+                            return
+                except Exception:
+                    pass
                 # Threat mechanic: increase per step based on party level vs floor, then maybe trigger
                 if self.mode == MODE_MAZE and not special:
                     # Determine scaling based on average party level relative to floor number (level index)
@@ -5820,6 +6099,8 @@ class Game:
                         self.victory_input(event)
                     elif self.mode == MODE_BATTLE:
                         self.battle_input(event)
+                    elif self.mode == MODE_DIALOG:
+                        self.dialog_input(event)
                     elif self.mode == MODE_TRAIT:
                         self.trait_input(event)
 
@@ -5873,6 +6154,8 @@ class Game:
                     self.draw_victory()
                 elif self.mode == MODE_BATTLE:
                     self.draw_battle()
+                elif self.mode == MODE_DIALOG:
+                    self.draw_dialog()
                 elif self.mode == MODE_TRAIT:
                     self.draw_trait()
 

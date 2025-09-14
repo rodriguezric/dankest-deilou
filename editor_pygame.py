@@ -8,6 +8,7 @@ import pygame
 # Tile constants (match main.py)
 T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U, T_LOCKED = 0, 1, 2, 3, 4, 5
 TOOL_CHEST = 6  # editor-only tool id for chests
+TOOL_NPC = 7    # editor-only tool id for NPCs
 
 DATA_DIR = 'data'
 LEVEL_DIR = os.path.join(DATA_DIR, 'levels')
@@ -58,6 +59,7 @@ class LevelDoc:
         self.town_portal: Optional[Tuple[int, int]] = (2, 2) if index == 0 else None
         self.encounters: Dict[str, Any] = {"monsters": [], "group": [1, 3]}
         self.chests: List[Dict[str, Any]] = []
+        self.npcs: List[Dict[str, Any]] = []
         self.size: Tuple[int, int] = (W, H)
         self.load()
 
@@ -103,6 +105,17 @@ class LevelDoc:
                 except Exception:
                     continue
 
+        # Load NPCs
+        npcs = self.data.get('npcs', [])
+        if isinstance(npcs, list):
+            self.npcs = []
+            for n in npcs:
+                try:
+                    x = int(n.get('x')); y = int(n.get('y')); nid = str(n.get('id'))
+                    self.npcs.append({'x': x, 'y': y, 'id': nid})
+                except Exception:
+                    continue
+
         # ensure markers reflected in grid
         if self.town_portal:
             x,y = self.town_portal; self.grid[y][x] = T_TOWN
@@ -119,6 +132,8 @@ class LevelDoc:
         }
         if self.chests:
             d['chests'] = list(self.chests)
+        if self.npcs:
+            d['npcs'] = list(self.npcs)
         if self.stairs_down: d['stairs_down'] = list(self.stairs_down)
         if self.stairs_up: d['stairs_up'] = list(self.stairs_up)
         if self.index == 0 and self.town_portal:
@@ -162,6 +177,8 @@ class Editor:
         self.monsters: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'monsters.json'), [])
         # Items list for chest assignment UI
         self.items: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'items.json'), [])
+        # NPC list for NPC node assignment
+        self.npcs: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'npcs.json'), [])
 
     def grid_pos_from_mouse(self, mx, my):
         gx = (mx - MARGIN) // TILE
@@ -267,6 +284,12 @@ class Editor:
                 cr.y = r.y + (TILE//2)
                 pygame.draw.rect(self.screen, (140, 100, 40), cr)
                 pygame.draw.rect(self.screen, (90, 70, 30), cr, 1)
+        # Draw NPCs as cyan dots
+        for n in self.doc.npcs:
+            x, y = int(n.get('x', -1)), int(n.get('y', -1))
+            if 0 <= x < W and 0 <= y < H:
+                r = pygame.Rect(ox + x*TILE, oy + y*TILE, TILE-1, TILE-1)
+                pygame.draw.circle(self.screen, (60, 200, 200), r.center, max(3, TILE//4))
         # Grid border
         pygame.draw.rect(self.screen, YELLOW, (ox-1, oy-1, grid_w+2, grid_h+2), 1)
 
@@ -290,7 +313,7 @@ class Editor:
         self.text_small('Generate', (px+8, py+4))
         py += 30
         self.text_small('S: Save   ,/.: Prev/Next level', (px, py)); py += 18
-        self.text_small('0..6: Select tool   R: Reset', (px, py)); py += 18
+        self.text_small('0..7: Select tool   R: Reset', (px, py)); py += 18
         self.text_small('Right-click stairs-down: link', (px, py)); py += 18
         py += 6
         tools = [
@@ -301,6 +324,7 @@ class Editor:
             (T_STAIRS_U, 'Stairs Up'),
             (T_LOCKED, 'Locked Door'),
             (TOOL_CHEST, 'Chest'),
+            (TOOL_NPC, 'NPC'),
         ]
         self.tool_rects = []
         for tid, label in tools:
@@ -338,7 +362,7 @@ class Editor:
             self.text(self.input_prompt, (rx+16, ry+18))
             self.text(self.input_text + '_', (rx+16, ry+58), YELLOW)
             # If in suggestion modes, show suggestions below
-            if self.input_mode in ('monster','item') and self.input_suggestions:
+            if self.input_mode in ('monster','item','npc') and self.input_suggestions:
                 sy = ry + 84
                 self.suggestion_rects = []
                 for i, (_id, disp) in enumerate(self.input_suggestions[:6]):
@@ -546,6 +570,86 @@ class Editor:
             self.draw()
         return None
 
+    def read_npc_id_input(self) -> Optional[str]:
+        # Prompt user with tab-completion and selection list for NPC IDs
+        self.input_active = True
+        self.input_prompt = 'Enter NPC id:'
+        self.input_text = ''
+        self.input_mode = 'npc'
+        self.input_suggestions = []
+        self.suggestion_index = -1
+
+        def all_ids():
+            return [str(n.get('id')) for n in self.npcs if isinstance(n, dict) and n.get('id')]
+
+        def find_matches(prefix: str) -> List[Tuple[str, str]]:
+            ids = all_ids()
+            pref = prefix.lower()
+            matches = [i for i in ids if i.lower().startswith(pref)] if pref else ids
+            id_to_name = {n.get('id'): n.get('name') for n in self.npcs if isinstance(n, dict)}
+            return [(i, f"{i} - {id_to_name.get(i, '')}") for i in matches]
+
+        while self.input_active:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.input_mode == 'npc' and self.input_suggestions and event.button == 1:
+                        mx, my = event.pos
+                        for idx, r in enumerate(self.suggestion_rects):
+                            if r.collidepoint(mx, my):
+                                sel_id = self.input_suggestions[idx][0]
+                                self.input_active = False
+                                self.input_mode = 'text'
+                                self.input_suggestions = []
+                                self.suggestion_index = -1
+                                return sel_id
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return None
+                    elif event.key == pygame.K_RETURN:
+                        text = self.input_text.strip()
+                        if self.input_suggestions and 0 <= self.suggestion_index < len(self.input_suggestions):
+                            text = self.input_suggestions[self.suggestion_index][0]
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return text if text else None
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                        if self.input_mode == 'npc':
+                            self.input_suggestions = find_matches(self.input_text)
+                            self.suggestion_index = 0 if self.input_suggestions else -1
+                    elif event.key == pygame.K_TAB:
+                        matches = find_matches(self.input_text)
+                        if len(matches) == 1:
+                            self.input_text = matches[0][0]
+                            self.input_suggestions = []
+                            self.suggestion_index = -1
+                        elif len(matches) > 1:
+                            self.input_suggestions = matches
+                            self.suggestion_index = 0
+                    elif event.key in (pygame.K_UP, pygame.K_DOWN):
+                        if self.input_suggestions:
+                            if event.key == pygame.K_UP:
+                                self.suggestion_index = (self.suggestion_index - 1) % len(self.input_suggestions)
+                            else:
+                                self.suggestion_index = (self.suggestion_index + 1) % len(self.input_suggestions)
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            self.input_text += ch
+                            if self.input_mode == 'npc':
+                                self.input_suggestions = find_matches(self.input_text)
+                                self.suggestion_index = 0 if self.input_suggestions else -1
+            self.draw()
+        return None
+
     def read_item_id_input(self) -> Optional[str]:
         # Prompt user to enter an item id with suggestions
         self.input_active = True
@@ -743,6 +847,12 @@ class Editor:
                                             self.doc.chests.pop(found)
                                         else:
                                             self.doc.chests.append({'x': x, 'y': y, 'iid': 'potion_small'})
+                                    elif self.tool == TOOL_NPC:
+                                        found = next((i for i,n in enumerate(self.doc.npcs) if n.get('x')==x and n.get('y')==y), None)
+                                        if found is not None:
+                                            self.doc.npcs.pop(found)
+                                        else:
+                                            self.doc.npcs.append({'x': x, 'y': y, 'id': 'guide'})
                                     else:
                                         self.set_tile(x, y, self.tool)
                             elif event.button == 3:
@@ -757,6 +867,12 @@ class Editor:
                                             iid = self.read_item_id_input()
                                             if iid:
                                                 self.doc.chests[idx]['iid'] = iid
+                                        # Right-click an NPC to set NPC id (with tab completion)
+                                        idx = next((i for i,n in enumerate(self.doc.npcs) if n.get('x')==x and n.get('y')==y), None)
+                                        if idx is not None:
+                                            nid = self.read_npc_id_input()
+                                            if nid:
+                                                self.doc.npcs[idx]['id'] = nid
                 elif event.type == pygame.KEYDOWN and not self.input_active:
                     if event.key == pygame.K_s:
                         self.doc.save(); self.status = f'Saved level {self.doc.index}'
@@ -773,7 +889,7 @@ class Editor:
                         self.doc = LevelDoc(max(0, self.doc.index - 1))
                     elif event.key in (pygame.K_PERIOD,):
                         self.doc = LevelDoc(self.doc.index + 1)
-                    elif pygame.K_0 <= event.key <= pygame.K_6:
+                    elif pygame.K_0 <= event.key <= pygame.K_7:
                         self.tool = event.key - pygame.K_0
 
             self.draw()
@@ -948,5 +1064,6 @@ if __name__ == '__main__':
     if len(sys.argv) >= 2:
         try:
             idx = int(sys.argv[1])
-        except: pass
+        except Exception:
+            pass
     Editor(idx).run()
