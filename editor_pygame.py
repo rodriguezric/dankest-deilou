@@ -9,6 +9,7 @@ import pygame
 T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U, T_LOCKED = 0, 1, 2, 3, 4, 5
 TOOL_CHEST = 6  # editor-only tool id for chests
 TOOL_NPC = 7    # editor-only tool id for NPCs
+TOOL_ELITE = 8  # editor-only tool id for Elite nodes
 
 DATA_DIR = 'data'
 LEVEL_DIR = os.path.join(DATA_DIR, 'levels')
@@ -60,6 +61,7 @@ class LevelDoc:
         self.encounters: Dict[str, Any] = {"monsters": [], "group": [1, 3]}
         self.chests: List[Dict[str, Any]] = []
         self.npcs: List[Dict[str, Any]] = []
+        self.elites: List[Dict[str, Any]] = []
         self.size: Tuple[int, int] = (W, H)
         self.load()
 
@@ -116,6 +118,30 @@ class LevelDoc:
                 except Exception:
                     continue
 
+        # Load NPCs
+        npcs = self.data.get('npcs', [])
+        if isinstance(npcs, list):
+            self.npcs = []
+            for n in npcs:
+                try:
+                    x = int(n.get('x')); y = int(n.get('y')); nid = str(n.get('id'))
+                    self.npcs.append({'x': x, 'y': y, 'id': nid})
+                except Exception:
+                    continue
+
+        # Load elites
+        elites = self.data.get('elites', [])
+        if isinstance(elites, list):
+            self.elites = []
+            for e in elites:
+                try:
+                    x = int(e.get('x')); y = int(e.get('y'))
+                    mid = str(e.get('id'))
+                    pat = str(e.get('pattern', 'up_down'))
+                    self.elites.append({'x': x, 'y': y, 'id': mid, 'pattern': pat})
+                except Exception:
+                    continue
+
         # ensure markers reflected in grid
         if self.town_portal:
             x,y = self.town_portal; self.grid[y][x] = T_TOWN
@@ -134,6 +160,8 @@ class LevelDoc:
             d['chests'] = list(self.chests)
         if self.npcs:
             d['npcs'] = list(self.npcs)
+        if self.elites:
+            d['elites'] = list(self.elites)
         if self.stairs_down: d['stairs_down'] = list(self.stairs_down)
         if self.stairs_up: d['stairs_up'] = list(self.stairs_up)
         if self.index == 0 and self.town_portal:
@@ -290,6 +318,22 @@ class Editor:
             if 0 <= x < W and 0 <= y < H:
                 r = pygame.Rect(ox + x*TILE, oy + y*TILE, TILE-1, TILE-1)
                 pygame.draw.circle(self.screen, (60, 200, 200), r.center, max(3, TILE//4))
+        # Draw elites as orange diamonds (always on top of tiles)
+        for e in getattr(self.doc, 'elites', []) or []:
+            try:
+                x, y = int(e.get('x', -1)), int(e.get('y', -1))
+            except Exception:
+                continue
+            if 0 <= x < W and 0 <= y < H:
+                r = pygame.Rect(ox + x*TILE, oy + y*TILE, TILE-1, TILE-1)
+                pts = [
+                    (r.centerx, r.top + 4),
+                    (r.right - 4, r.centery),
+                    (r.centerx, r.bottom - 4),
+                    (r.left + 4, r.centery),
+                ]
+                pygame.draw.polygon(self.screen, (220, 140, 40), pts)
+                pygame.draw.polygon(self.screen, (240, 220, 80), pts, 1)
         # Grid border
         pygame.draw.rect(self.screen, YELLOW, (ox-1, oy-1, grid_w+2, grid_h+2), 1)
 
@@ -313,7 +357,7 @@ class Editor:
         self.text_small('Generate', (px+8, py+4))
         py += 30
         self.text_small('S: Save   ,/.: Prev/Next level', (px, py)); py += 18
-        self.text_small('0..7: Select tool   R: Reset', (px, py)); py += 18
+        self.text_small('0..8: Select tool   R: Reset', (px, py)); py += 18
         self.text_small('Right-click stairs-down: link', (px, py)); py += 18
         py += 6
         tools = [
@@ -325,6 +369,7 @@ class Editor:
             (T_LOCKED, 'Locked Door'),
             (TOOL_CHEST, 'Chest'),
             (TOOL_NPC, 'NPC'),
+            (TOOL_ELITE, 'Elite'),
         ]
         self.tool_rects = []
         for tid, label in tools:
@@ -361,18 +406,18 @@ class Editor:
             pygame.draw.rect(self.screen, YELLOW, rect, 2)
             self.text(self.input_prompt, (rx+16, ry+18))
             self.text(self.input_text + '_', (rx+16, ry+58), YELLOW)
-            # If in suggestion modes, show suggestions below
-            if self.input_mode in ('monster','item','npc') and self.input_suggestions:
-                sy = ry + 84
-                self.suggestion_rects = []
-                for i, (_id, disp) in enumerate(self.input_suggestions[:6]):
-                    r = pygame.Rect(rx+16, sy, box_w-32, 22)
-                    sel = (i == self.suggestion_index)
-                    pygame.draw.rect(self.screen, (60,60,80) if sel else (40,40,48), r)
-                    pygame.draw.rect(self.screen, YELLOW if sel else WHITE, r, 1)
-                    self.text_small(disp, (r.x+8, r.y+4), YELLOW if sel else WHITE)
-                    self.suggestion_rects.append(r)
-                    sy += 24
+        # If in suggestion modes, show suggestions below
+        if self.input_mode in ('monster','elite_monster','item','npc','pattern') and self.input_suggestions:
+            sy = ry + 84
+            self.suggestion_rects = []
+            for i, (_id, disp) in enumerate(self.input_suggestions[:6]):
+                r = pygame.Rect(rx+16, sy, box_w-32, 22)
+                sel = (i == self.suggestion_index)
+                pygame.draw.rect(self.screen, (60,60,80) if sel else (40,40,48), r)
+                pygame.draw.rect(self.screen, YELLOW if sel else WHITE, r, 1)
+                self.text_small(disp, (r.x+8, r.y+4), YELLOW if sel else WHITE)
+                self.suggestion_rects.append(r)
+                sy += 24
 
         # File menu overlay
         if self.file_menu and not self.input_active:
@@ -565,6 +610,168 @@ class Editor:
                             self.input_text += ch
                             # If suggestions are currently shown, refresh them
                             if self.input_mode == 'monster':
+                                self.input_suggestions = find_matches(self.input_text)
+                                self.suggestion_index = 0 if self.input_suggestions else -1
+            self.draw()
+        return None
+
+    def read_elite_monster_id_input(self) -> Optional[str]:
+        # Prompt user with tab-completion and selection list filtered to elite-tier monsters
+        self.input_active = True
+        self.input_prompt = 'Elite monster id:'
+        self.input_text = ''
+        self.input_mode = 'elite_monster'
+        self.input_suggestions = []
+        self.suggestion_index = -1
+
+        def all_elite_ids():
+            ids = []
+            for m in self.monsters:
+                if isinstance(m, dict) and m.get('id') and str(m.get('tier','')).lower() == 'elite':
+                    ids.append(str(m.get('id')))
+            return ids
+
+        def find_matches(prefix: str) -> List[Tuple[str, str]]:
+            ids = all_elite_ids()
+            pref = (prefix or '').lower()
+            matches = [i for i in ids if i.lower().startswith(pref)] if pref else ids
+            id_to_name = {m.get('id'): m.get('name') for m in self.monsters if isinstance(m, dict)}
+            return [(i, f"{i} - {id_to_name.get(i, '')}") for i in matches]
+
+        while self.input_active:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.input_mode == 'elite_monster' and self.input_suggestions and event.button == 1:
+                        mx, my = event.pos
+                        for idx, r in enumerate(self.suggestion_rects):
+                            if r.collidepoint(mx, my):
+                                sel_id = self.input_suggestions[idx][0]
+                                self.input_active = False
+                                self.input_mode = 'text'
+                                self.input_suggestions = []
+                                self.suggestion_index = -1
+                                return sel_id
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return None
+                    elif event.key == pygame.K_RETURN:
+                        text = self.input_text.strip()
+                        if self.input_suggestions and 0 <= self.suggestion_index < len(self.input_suggestions):
+                            text = self.input_suggestions[self.suggestion_index][0]
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        # accept only elite ids
+                        return text if text in all_elite_ids() else None
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                        if self.input_mode == 'elite_monster':
+                            self.input_suggestions = find_matches(self.input_text)
+                            self.suggestion_index = 0 if self.input_suggestions else -1
+                    elif event.key == pygame.K_TAB:
+                        matches = find_matches(self.input_text)
+                        if len(matches) == 1:
+                            self.input_text = matches[0][0]
+                            self.input_suggestions = []
+                            self.suggestion_index = -1
+                        elif len(matches) > 1:
+                            self.input_suggestions = matches
+                            self.suggestion_index = 0
+                    elif event.key in (pygame.K_UP, pygame.K_DOWN):
+                        if self.input_suggestions:
+                            if event.key == pygame.K_UP:
+                                self.suggestion_index = (self.suggestion_index - 1) % len(self.input_suggestions)
+                            else:
+                                self.suggestion_index = (self.suggestion_index + 1) % len(self.input_suggestions)
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            self.input_text += ch
+                            if self.input_mode == 'elite_monster':
+                                self.input_suggestions = find_matches(self.input_text)
+                                self.suggestion_index = 0 if self.input_suggestions else -1
+            self.draw()
+        return None
+
+    def read_pattern_input(self) -> Optional[str]:
+        # Prompt with tab-completion for elite movement pattern
+        self.input_active = True
+        self.input_prompt = 'Pattern (up_down/left_right):'
+        self.input_text = ''
+        self.input_mode = 'pattern'
+        self.input_suggestions = []
+        self.suggestion_index = -1
+
+        patterns = ['up_down', 'left_right']
+
+        def find_matches(prefix: str) -> List[Tuple[str, str]]:
+            pref = (prefix or '').lower()
+            matches = [p for p in patterns if p.startswith(pref)] if pref else patterns
+            return [(m, m) for m in matches]
+
+        while self.input_active:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.input_mode == 'pattern' and self.input_suggestions and event.button == 1:
+                        mx, my = event.pos
+                        for idx, r in enumerate(self.suggestion_rects):
+                            if r.collidepoint(mx, my):
+                                sel = self.input_suggestions[idx][0]
+                                self.input_active = False
+                                self.input_mode = 'text'
+                                self.input_suggestions = []
+                                self.suggestion_index = -1
+                                return sel
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return None
+                    elif event.key == pygame.K_RETURN:
+                        text = self.input_text.strip()
+                        if self.input_suggestions and 0 <= self.suggestion_index < len(self.input_suggestions):
+                            text = self.input_suggestions[self.suggestion_index][0]
+                        self.input_active = False
+                        self.input_mode = 'text'
+                        self.input_suggestions = []
+                        self.suggestion_index = -1
+                        return text if text in patterns else None
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                        if self.input_mode == 'pattern':
+                            self.input_suggestions = find_matches(self.input_text)
+                            self.suggestion_index = 0 if self.input_suggestions else -1
+                    elif event.key == pygame.K_TAB:
+                        matches = find_matches(self.input_text)
+                        if len(matches) == 1:
+                            self.input_text = matches[0][0]
+                            self.input_suggestions = []
+                            self.suggestion_index = -1
+                        elif len(matches) > 1:
+                            self.input_suggestions = matches
+                            self.suggestion_index = 0
+                    elif event.key in (pygame.K_UP, pygame.K_DOWN):
+                        if self.input_suggestions:
+                            if event.key == pygame.K_UP:
+                                self.suggestion_index = (self.suggestion_index - 1) % len(self.input_suggestions)
+                            else:
+                                self.suggestion_index = (self.suggestion_index + 1) % len(self.input_suggestions)
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            self.input_text += ch
+                            if self.input_mode == 'pattern':
                                 self.input_suggestions = find_matches(self.input_text)
                                 self.suggestion_index = 0 if self.input_suggestions else -1
             self.draw()
@@ -853,6 +1060,12 @@ class Editor:
                                             self.doc.npcs.pop(found)
                                         else:
                                             self.doc.npcs.append({'x': x, 'y': y, 'id': 'guide'})
+                                    elif self.tool == TOOL_ELITE:
+                                        found = next((i for i,e in enumerate(self.doc.elites) if e.get('x')==x and e.get('y')==y), None)
+                                        if found is not None:
+                                            self.doc.elites.pop(found)
+                                        else:
+                                            self.doc.elites.append({'x': x, 'y': y, 'id': 'goblin_chief', 'pattern': 'up_down'})
                                     else:
                                         self.set_tile(x, y, self.tool)
                             elif event.button == 3:
@@ -873,6 +1086,15 @@ class Editor:
                                             nid = self.read_npc_id_input()
                                             if nid:
                                                 self.doc.npcs[idx]['id'] = nid
+                                        # Right-click an Elite to set monster id and pattern (with tab completion)
+                                        idx = next((i for i,e in enumerate(self.doc.elites) if e.get('x')==x and e.get('y')==y), None)
+                                        if idx is not None:
+                                            mid = self.read_elite_monster_id_input()
+                                            if mid:
+                                                self.doc.elites[idx]['id'] = mid
+                                            pat = self.read_pattern_input()
+                                            if pat:
+                                                self.doc.elites[idx]['pattern'] = pat
                 elif event.type == pygame.KEYDOWN and not self.input_active:
                     if event.key == pygame.K_s:
                         self.doc.save(); self.status = f'Saved level {self.doc.index}'
@@ -889,8 +1111,45 @@ class Editor:
                         self.doc = LevelDoc(max(0, self.doc.index - 1))
                     elif event.key in (pygame.K_PERIOD,):
                         self.doc = LevelDoc(self.doc.index + 1)
-                    elif pygame.K_0 <= event.key <= pygame.K_7:
+                    elif pygame.K_0 <= event.key <= pygame.K_8:
                         self.tool = event.key - pygame.K_0
+                    elif event.key == pygame.K_DELETE:
+                        # Delete whatever node is under the mouse and leave floor
+                        mx, my = pygame.mouse.get_pos()
+                        gp = self.grid_pos_from_mouse(mx, my)
+                        if gp:
+                            x, y = gp
+                        # Clear tile to floor
+                        self.doc.grid[y][x] = T_EMPTY
+                        # Clear stair markers if present
+                        if self.doc.stairs_down == (x, y):
+                            self.doc.stairs_down = None
+                        if self.doc.stairs_up == (x, y):
+                            self.doc.stairs_up = None
+                        if self.doc.town_portal == (x, y):
+                            self.doc.town_portal = None
+                        # Remove chest at cell
+                        ci = next((i for i,c in enumerate(self.doc.chests) if int(c.get('x',-1))==x and int(c.get('y',-1))==y), None)
+                        if ci is not None:
+                            try:
+                                self.doc.chests.pop(ci)
+                            except Exception:
+                                pass
+                        # Remove NPC at cell
+                        ni = next((i for i,n in enumerate(self.doc.npcs) if int(n.get('x',-1))==x and int(n.get('y',-1))==y), None)
+                        if ni is not None:
+                            try:
+                                self.doc.npcs.pop(ni)
+                            except Exception:
+                                pass
+                        # Remove Elite at cell
+                        ei = next((i for i,e in enumerate(getattr(self.doc,'elites',[]) or []) if int(e.get('x',-1))==x and int(e.get('y',-1))==y), None)
+                        if ei is not None:
+                            try:
+                                self.doc.elites.pop(ei)
+                            except Exception:
+                                pass
+                        self.status = f'Deleted nodes at {x},{y}'
 
             self.draw()
             clock.tick(60)
