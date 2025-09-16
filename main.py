@@ -37,6 +37,7 @@ FONT_PATH = "fonts/prstart.ttf"
 MUSIC_TOWN = "town.wav"
 MUSIC_LABYRINTH = "labyrinth.wav"
 MUSIC_BATTLE = "battle.wav"
+MUSIC_ELITE_BATTLE = "elite_battle.ogg"
 
 MAZE_W, MAZE_H = 24, 24
 
@@ -123,6 +124,7 @@ class MusicManager:
             'town': self._load_sound(MUSIC_TOWN),
             'labyrinth': self._load_sound(MUSIC_LABYRINTH),
             'battle': self._load_sound(MUSIC_BATTLE),
+            'elite_battle': self._load_sound(MUSIC_ELITE_BATTLE),
         }
         # Two channels for crossfading
         try:
@@ -499,7 +501,14 @@ class Enemy:
                 atk_low, atk_high = band(dmg_avg)
             # Tier adjustments
             if tier == 'elite':
-                hp = int(hp * 1.5)
+                # Scale HP to approximate the total HP of a 4‑member party at level L
+                try:
+                    base_sum = int(BASE_HP.get('Fighter', 12)) + int(BASE_HP.get('Rogue', 8)) \
+                               + int(BASE_HP.get('Priest', 8)) + int(BASE_HP.get('Mage', 6))
+                except Exception:
+                    base_sum = 34  # fallback (12+8+8+6)
+                party_total_hp = base_sum + 16 * (L - 1)  # ~ +4 HP per member per level
+                hp = max(hp, int(party_total_hp))
                 ac = min(13, ac + 1)
                 atk_low = int(round(atk_low * 1.1)); atk_high = int(round(atk_high * 1.15))
             elif tier == 'boss':
@@ -514,6 +523,16 @@ class Enemy:
 
         # Legacy schema fallback
         hp = random.randint(base.get("hp_low", 6), base.get("hp_high", 10))
+        # If legacy base indicates elite tier, scale HP similarly
+        try:
+            if str(base.get('tier','')).lower() == 'elite':
+                L = max(1, int(floor_num))
+                base_sum = int(BASE_HP.get('Fighter', 12)) + int(BASE_HP.get('Rogue', 8)) \
+                           + int(BASE_HP.get('Priest', 8)) + int(BASE_HP.get('Mage', 6))
+                party_total_hp = base_sum + 16 * (L - 1)
+                hp = max(hp, int(party_total_hp))
+        except Exception:
+            pass
         return Enemy(
             id=eid, name=name,
             hp=hp,
@@ -560,6 +579,8 @@ class Level:
     chests: List[Dict[str, Any]] = field(default_factory=list)
     # NPC nodes on this level: list of {'x':int,'y':int,'id':str}
     npcs: List[Dict[str, Any]] = field(default_factory=list)
+    # Elites on this level: list of {'x':int,'y':int,'id':str,'pattern':str}
+    elites: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class Dungeon:
@@ -634,6 +655,19 @@ class Dungeon:
                         except Exception:
                             continue
                     lvl.npcs = clean
+                # Elites
+                elites = data.get('elites', [])
+                if isinstance(elites, list):
+                    clean = []
+                    for e in elites:
+                        try:
+                            x = int(e.get('x')); y = int(e.get('y'))
+                            mid = str(e.get('id'))
+                            pat = str(e.get('pattern', 'up_down'))
+                            clean.append({'x': x, 'y': y, 'id': mid, 'pattern': pat})
+                        except Exception:
+                            continue
+                    lvl.elites = clean
         except Exception:
             pass
         if ix == 0 and not lvl.town_portal:
@@ -742,7 +776,8 @@ class Renderer:
                      world_shift_tiles: Tuple[float, float] = (0.0, 0.0), player_bob_px: int = 0,
                      player_frac: Tuple[float, float] = (0.0, 0.0),
                      visible_tiles: set = None, seen_tiles: set = None, apply_fov: bool = False,
-                     chests: List[Dict[str, Any]] = None, npcs: List[Dict[str, Any]] = None):
+                     chests: List[Dict[str, Any]] = None, npcs: List[Dict[str, Any]] = None,
+                     elites: List[Dict[str, Any]] = None):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 22))
         px, py = pos
@@ -844,6 +879,25 @@ class Renderer:
             self._overlay_torch_fov(view, grid, px, py, facing, cell, ox, oy, radius,
                                      world_px_off=int(shift_px[0]), world_py_off=int(shift_px[1]),
                                      player_center_frac=(pxf, pyf))
+        # Draw elites after fog so they are visible
+        if elites:
+            for e in elites:
+                try:
+                    ex, ey = int(e.get('x', -9999)), int(e.get('y', -9999))
+                    fx, fy = float(e.get('fx', 0.0)), float(e.get('fy', 0.0))
+                except Exception:
+                    continue
+                if py - radius <= ey <= py + radius and px - radius <= ex <= px + radius:
+                    sx = ox + (ex - (px - radius) + fx) * cell + int(shift_px[0])
+                    sy = oy + (ey - (py - radius) + fy) * cell + int(shift_px[1])
+                    pts = [
+                        (int(sx + cell*0.5), int(sy + 4)),
+                        (int(sx + cell - 4), int(sy + cell*0.5)),
+                        (int(sx + cell*0.5), int(sy + cell - 4)),
+                        (int(sx + 4), int(sy + cell*0.5)),
+                    ]
+                    pygame.draw.polygon(view, (220, 140, 40), pts)
+                    pygame.draw.polygon(view, (240, 220, 80), pts, 1)
         # Floor/position/direction are rendered by Game.draw_floor_indicator()
 
     def _overlay_vision_cone(self, surf: pygame.Surface, center: Tuple[int, int], facing: int,
@@ -2521,6 +2575,11 @@ class Game:
         self.chests_state: Dict[int, List[Dict[str, Any]]] = {}
         # Persistent state: doors unlocked per level (list of (x,y))
         self.doors_unlocked: Dict[int, List[Tuple[int, int]]] = {}
+        # Persistent elites per level (alive elites)
+        self.elites_state: Dict[int, List[Dict[str, Any]]] = {}
+        # Runtime elite movement animation
+        self.elite_moves: Dict[Tuple[int,int], Dict[str, Any]] = {}
+        self.elite_battle_ctx: Optional[Dict[str, Any]] = None
 
         # Treasure popup
         self.treasure_popup_active: bool = False
@@ -2629,9 +2688,15 @@ class Game:
                 self.music.crossfade_to('town', fade_ms=1200)
             elif new_mode == MODE_MAZE:
                 self.music.crossfade_to('labyrinth', fade_ms=1200)
-            elif new_mode in (MODE_COMBAT_INTRO, MODE_BATTLE):
-                # Start battle immediately (no crossfade)
-                self.music.play_immediate('battle')
+            elif new_mode == MODE_COMBAT_INTRO:
+                # Start battle immediately (no crossfade) once at intro.
+                if self.in_battle and getattr(self.in_battle, 'is_elite', False):
+                    self.music.play_immediate('elite_battle')
+                else:
+                    self.music.play_immediate('battle')
+            elif new_mode == MODE_BATTLE:
+                # Keep current battle music; do not restart on entering MODE_BATTLE
+                pass
             elif new_mode == MODE_VICTORY:
                 # Fade the battle music to silence over 3 seconds
                 self.music.fade_out_all(fade_ms=3000)
@@ -2766,6 +2831,7 @@ class Game:
         seen_ser = {str(k): [[int(x), int(y)] for (x, y) in sorted(v)] for k, v in self.seen_by_level.items()}
         chests_ser = {str(k): list(v) for k, v in self.chests_state.items()}
         doors_ser = {str(k): [[int(x), int(y)] for (x, y) in v] for k, v in self.doors_unlocked.items()}
+        elites_ser = {str(k): list(v) for k, v in self.elites_state.items()}
         data = {
             "party": self.party.to_dict(),
             "pos": self.pos,
@@ -2774,6 +2840,7 @@ class Game:
             "seen": seen_ser,
             "chests": chests_ser,
             "doors": doors_ser,
+            "elites": elites_ser,
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -2838,6 +2905,20 @@ class Game:
         except Exception:
             pass
         self.apply_level_state(self.level_ix)
+        # Elites
+        self.elites_state = {}
+        try:
+            ed = data.get("elites", {})
+            if isinstance(ed, dict):
+                for k, v in ed.items():
+                    try:
+                        ix = int(k)
+                        if isinstance(v, list):
+                            self.elites_state[ix] = list(v)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
         self.pos = tuple(data.get("pos", (2, 2)))
         self.facing = int(data.get("facing", 1))
         self.log.add("Game loaded.")
@@ -4026,6 +4107,91 @@ class Game:
         elif t == T_STAIRS_U:
             self.go_up_stairs()
 
+    def _move_elites_after_player(self):
+        lvl = self.dun.levels[self.level_ix]
+        elites = getattr(lvl, 'elites', []) or []
+        if not elites:
+            return
+        # If player is standing on an elite, trigger battle immediately and do not move elites this step
+        try:
+            for i, e in enumerate(elites):
+                if (int(e.get('x', -1)), int(e.get('y', -1))) == tuple(self.pos):
+                    # Cancel any ongoing elite animations for this level to avoid post-collision motion
+                    try:
+                        for key in list(self.elite_moves.keys()):
+                            if isinstance(key, tuple) and key[0] == self.level_ix:
+                                self.elite_moves.pop(key, None)
+                    except Exception:
+                        pass
+                    self._start_elite_battle(self.level_ix, i, e)
+                    return
+        except Exception:
+            pass
+        now = pygame.time.get_ticks()
+        new_positions = []
+        for i, e in enumerate(elites):
+            ex, ey = int(e.get('x', -1)), int(e.get('y', -1))
+            pat = str(e.get('pattern', 'up_down'))
+            # Direction state per elite stored in dict
+            dkey = '_dir'
+            if dkey not in e:
+                e[dkey] = -1 if pat == 'up_down' else -1  # up/left initially
+            dx = dy = 0
+            if pat == 'up_down':
+                dy = e[dkey]
+            else:
+                dx = e[dkey]
+            nx, ny = ex + dx, ey + dy
+            # If blocked by wall/locked, reverse and recompute
+            def blocked(xx, yy):
+                if not self.in_bounds(xx, yy):
+                    return True
+                g = self.grid()
+                return g[yy][xx] in (T_WALL, T_LOCKED)
+            if blocked(nx, ny):
+                # Bounce in place: reverse direction for next step, but do not change tile now.
+                e[dkey] = -e[dkey]
+                # Start a short in-place bounce animation along attempted direction
+                self.elite_moves[(self.level_ix, i)] = {
+                    'bounce': True,
+                    'bdx': float(dx), 'bdy': float(dy),
+                    't0': now, 'dur': int(self.move_dur * 0.6)
+                }
+                nx, ny = ex, ey
+            else:
+                # Start move anim to the next tile
+                self.elite_moves[(self.level_ix, i)] = {'from': (ex, ey), 'to': (nx, ny), 't0': now, 'dur': self.move_dur}
+            # Apply position
+            e['x'], e['y'] = nx, ny
+            new_positions.append((nx, ny))
+        # Collision: if any elite now on player, start elite battle
+        for i, e in enumerate(elites):
+            if (int(e.get('x', -1)), int(e.get('y', -1))) == tuple(self.pos):
+                self._start_elite_battle(self.level_ix, i, e)
+                break
+
+    def _start_elite_battle(self, lvl_ix: int, elite_ix: int, elite: Dict[str, Any]):
+        # Record context for post-battle handling
+        self.elite_battle_ctx = {'level': lvl_ix, 'index': elite_ix, 'pos': (int(elite.get('x',0)), int(elite.get('y',0))), 'id': str(elite.get('id',''))}
+        # Kick battle with single elite monster
+        self.in_battle = Battle(self.party, self.log, self.effects, self.items_by_id, self.monsters_by_id, self.skills_config, self.sfx)
+        try:
+            setattr(self.in_battle, 'is_elite', True)
+        except Exception:
+            pass
+        mid = str(elite.get('id'))
+        floor_num = int(self.level_ix) + 1
+        mons = [Enemy.from_base(self.monsters_by_id.get(mid, {}), floor_num=floor_num)]
+        self.in_battle.enemies = mons
+        self.in_battle.build_turn_order(); self.in_battle.turn_pos = 0
+        # Music is handled in on_mode_changed when switching to COMBAT_INTRO
+        # Transition
+        self.mode = MODE_COMBAT_INTRO
+        self.combat_intro_active = True
+        self.combat_intro_stage = 0
+        self.combat_intro_t0 = pygame.time.get_ticks()
+        self.combat_intro_done_triggered = False
+
     def go_down_stairs(self):
         cur = self.dun.levels[self.level_ix]
         down_pos = cur.stairs_down or self.pos
@@ -4092,9 +4258,37 @@ class Game:
             seen.add(t)
         # Draw with fog-of-war overlay (pass both visible and seen)
         lvl = self.dun.levels[self.level_ix]
+        # Prepare elite draw list with simple per-move offsets
+        elites = []
+        try:
+            for i, e in enumerate(getattr(lvl, 'elites', []) or []):
+                ex, ey = int(e.get('x', -1)), int(e.get('y', -1))
+                mv = self.elite_moves.get((self.level_ix, i))
+                base_x, base_y = ex, ey
+                fx = fy = 0.0
+                if mv:
+                    t = max(0, pygame.time.get_ticks() - mv.get('t0', 0))
+                    dur = int(mv.get('dur', self.move_dur))
+                    p = min(1.0, t / float(max(1, dur)))
+                    if mv.get('bounce'):
+                        # In-place bounce: sine easing out/back along attempted direction
+                        amp = 0.25
+                        s = math.sin(math.pi * p)
+                        bdx = float(mv.get('bdx', 0.0)); bdy = float(mv.get('bdy', 0.0))
+                        fx = bdx * amp * s
+                        fy = bdy * amp * s
+                    else:
+                        # Move from the prior tile toward the destination proportionally
+                        frm = mv.get('from', (ex, ey)); to = mv.get('to', (ex, ey))
+                        base_x, base_y = int(frm[0]), int(frm[1])
+                        fx = (float(to[0]) - float(frm[0])) * p
+                        fy = (float(to[1]) - float(frm[1])) * p
+                elites.append({'x': base_x, 'y': base_y, 'fx': fx, 'fy': fy})
+        except Exception:
+            elites = []
         self.r.draw_topdown(self.grid(), self.pos, self.facing, self.level_ix, shift_tiles, bob_px, frac,
                             visible_tiles=visible_tiles, seen_tiles=seen, apply_fov=False,
-                            chests=getattr(lvl, 'chests', []), npcs=getattr(lvl, 'npcs', []))
+                            chests=getattr(lvl, 'chests', []), npcs=getattr(lvl, 'npcs', []), elites=elites)
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Removed on-screen controls display for a cleaner labyrinth view
         # Draw threat flash (when meter is full) and indicator (top-right)
@@ -4167,6 +4361,12 @@ class Game:
             for (dx, dy) in doors:
                 if 0 <= dy < len(g) and 0 <= dx < len(g[0]):
                     g[dy][dx] = T_EMPTY
+        except Exception:
+            pass
+        # Apply elites: override level elites with saved state if present
+        try:
+            if ix in self.elites_state:
+                lvl.elites = list(self.elites_state.get(ix, []))
         except Exception:
             pass
 
@@ -5162,6 +5362,27 @@ class Game:
         view.fill((14, 14, 22))
         # Background: subtle ripple rings (like water drips)
         self.draw_battle_ripples(view)
+        # Elite battle visual treatment: slow red pulse + light noise
+        if b and getattr(b, 'is_elite', False):
+            now_ms = pygame.time.get_ticks()
+            # Red pulse overlay
+            pulse = 0.5 + 0.5 * math.sin(now_ms / 900.0)
+            alpha = int(40 + 50 * pulse)
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((140, 20, 20, max(0, min(255, alpha))))
+            view.blit(overlay, (0, 0))
+            # Sparse noise (refresh every ~120ms)
+            noise = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            noise_alpha = 24
+            seed = int(now_ms // 120)
+            rng = random.Random(seed)
+            for _ in range(140):
+                x = rng.randint(0, WIDTH - 1)
+                y = rng.randint(0, VIEW_H - 1)
+                sz = rng.randint(1, 2)
+                c = (rng.randint(120, 180), rng.randint(10, 30), rng.randint(10, 30), noise_alpha)
+                pygame.draw.rect(noise, c, pygame.Rect(x, y, sz, sz))
+            view.blit(noise, (0, 0))
         party_highlight = set()
         party_acting = set()
         enemy_highlight = set()
@@ -5885,6 +6106,11 @@ class Game:
                 t = self.grid()[y][x]
                 special = t in (T_TOWN, T_STAIRS_D, T_STAIRS_U)
                 self.check_special_tile()
+                # Move elites one step after player steps
+                try:
+                    self._move_elites_after_player()
+                except Exception:
+                    pass
                 # Status ticks per step for party (poison/bleed/regen)
                 try:
                     for gi, m in enumerate(self.party.members):
@@ -6041,11 +6267,40 @@ class Game:
                     self.victory_anim_t0 = pygame.time.get_ticks()
                     self.victory_anim_dur = 1200
                     self.victory_done = False
+                    # If this was an elite battle, remove the elite node and persist
+                    if self.elite_battle_ctx:
+                        try:
+                            lvl_ix = int(self.elite_battle_ctx.get('level', self.level_ix))
+                            idx = int(self.elite_battle_ctx.get('index', -1))
+                            lvl = self.dun.levels[lvl_ix]
+                            if 0 <= idx < len(lvl.elites):
+                                lvl.elites.pop(idx)
+                                # Persist current elites for this level
+                                self.elites_state[lvl_ix] = list(lvl.elites)
+                        except Exception:
+                            pass
+                        self.elite_battle_ctx = None
                     self.mode = MODE_VICTORY
                 elif self.in_battle.result == 'fled':
                     # Reset threat after combat
                     self.threat = 0
                     self.threat_full_steps = 0
+                    # If flee from elite, bounce player away one cell from elite node
+                    if self.elite_battle_ctx:
+                        try:
+                            ex, ey = self.elite_battle_ctx.get('pos', (self.pos[0], self.pos[1]))
+                            px, py = self.pos
+                            dx = px - ex; dy = py - ey
+                            if abs(dx) >= abs(dy):
+                                step = (1 if dx >= 0 else -1, 0)
+                            else:
+                                step = (0, 1 if dy >= 0 else -1)
+                            nx, ny = px + step[0], py + step[1]
+                            if self.in_bounds(nx, ny) and self.is_open(nx, ny):
+                                self.pos = (nx, ny)
+                        except Exception:
+                            pass
+                        self.elite_battle_ctx = None
                     self.mode = MODE_MAZE
                 else:
                     # defeat: also reset threat (new run starts safe)

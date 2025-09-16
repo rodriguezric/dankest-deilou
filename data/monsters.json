@@ -45,4 +45,13 @@
       { "iid": "droplet", "chance": 0.1 }
     ]
   }
+  ,
+  {
+    "id": "goblin_chief",
+    "name": "Goblin Chief",
+    "archetype": "skirmisher",
+    "tier": "elite",
+    "gold_low": 8,
+    "gold_high": 22
+  }
 ]
