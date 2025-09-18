@@ -7,6 +7,13 @@
     "price": 20
   },
   {
+    "id": "serum",
+    "name": "Serum",
+    "type": "consumable",
+    "max_mp_up": 3,
+    "desc": "A potent tonic that permanently increases max MP by 3."
+  },
+  {
     "id": "sword_basic",
     "name": "Sword",
     "type": "weapon",

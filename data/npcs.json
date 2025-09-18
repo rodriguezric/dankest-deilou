@@ -10,4 +10,21 @@
       "When your party grows stronger than a floor, you can move freely—but do not grow complacent."
     ]
   }
+  ,
+  {
+    "id": "scientist",
+    "name": "Scientist",
+    "voice": "human_man",
+    "desc": "A focused scholar surrounded by notes and strange vials.",
+    "talk_intro": "I'm researching slimes for their unusual magical properties. If you find a Droplet, bring it to me!",
+    "talk_active": [
+      "Viscosity, conductivity... so many variables.",
+      "If only I had a pristine Droplet to test...",
+      "Slime essence might hold the key to reliable mana restoration."
+    ],
+    "talk_complete": [
+      "Fascinating! Slime composition can refresh one's mana reserves.",
+      "Your help proved the theory — slime essence boosts arcane flow."
+    ]
+  }
 ]

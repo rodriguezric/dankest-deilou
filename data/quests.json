@@ -1,0 +1,8 @@
+[
+  {
+    "id": "slime_research",
+    "name": "Slime Research",
+    "desc": "A scientist in town is researching slimes and needs a Droplet to complete his analysis.",
+    "complete_text": "With your Droplet, the scientist completes his research!"
+  }
+]

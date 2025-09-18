@@ -73,6 +73,7 @@ MODE_EQUIP = "EQUIP"
 MODE_SCENE = "SCENE"  # town<->labyrinth transition
 MODE_TRAIT = "TRAIT"   # post-creation trait selection
 MODE_DIALOG = "DIALOG" # NPC dialog
+MODE_QUESTS = "QUESTS" # Quests list
 
 # Temple costs
 TEMPLE_HEAL_PARTY_COST = 30
@@ -2608,6 +2609,7 @@ class Game:
         self.dialog_desc: str = ''
         self.dialog_typer_prev_chars: int = 0
         self.dialog_desc_typing: bool = False
+        self.dialog_item_ix: int = 0
 
     def party_average_level(self) -> float:
         # Prefer alive active members; fall back to alive members; else all members; default 1.0
@@ -2659,6 +2661,13 @@ class Game:
             self.npcs_by_id: Dict[str, Dict[str, Any]] = {n.get('id'): n for n in npcs if n.get('id')}
         except Exception:
             self.npcs_by_id = {}
+        # Quests
+        try:
+            qs = self.load_json(os.path.join('data', 'quests.json'), [])
+            self.quests_data: Dict[str, Dict[str, Any]] = {q.get('id'): q for q in qs if q.get('id')}
+        except Exception:
+            self.quests_data = {}
+        self.quests_state: Dict[str, str] = {}
 
     # --------------- Audio / Music ---------------
     def on_mode_changed(self, old_mode: Optional[str], new_mode: str):
@@ -2841,6 +2850,7 @@ class Game:
             "chests": chests_ser,
             "doors": doors_ser,
             "elites": elites_ser,
+            "quests": {k: v for k, v in self.quests_state.items()},
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -2921,6 +2931,13 @@ class Game:
             pass
         self.pos = tuple(data.get("pos", (2, 2)))
         self.facing = int(data.get("facing", 1))
+        # Quests
+        try:
+            qd = data.get("quests", {})
+            if isinstance(qd, dict):
+                self.quests_state = {str(k): str(v) for k, v in qd.items()}
+        except Exception:
+            self.quests_state = {}
         self.log.add("Game loaded.")
         # After loading, ensure town menu starts at the top choice
         self.menu_index = 0
@@ -3020,6 +3037,7 @@ class Game:
             "Enter the Labyrinth",
             "Equip",
             "Items",
+            "Quests",
             "Save / Load",
             "Exit to Title",
         ]
@@ -3032,11 +3050,13 @@ class Game:
 
     def town_input(self, event):
         if event.type == pygame.KEYDOWN:
+            # Keep town menu length in sync with draw_town options
+            town_options_len = 12
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.menu_index = (self.menu_index - 1) % 11
+                self.menu_index = (self.menu_index - 1) % town_options_len
                 self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.menu_index = (self.menu_index + 1) % 11
+                self.menu_index = (self.menu_index + 1) % town_options_len
                 self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self.sfx.play('ui_select', 0.6)
@@ -3097,8 +3117,13 @@ class Game:
             self.items_item_ix = 0
             self.mode = MODE_ITEMS
         elif ix == 9:
-            self.mode = MODE_SAVELOAD
+            # Quests screen
+            self.mode = MODE_QUESTS
+            self.quests_index = 0
+            self.quests_popup = False
         elif ix == 10:
+            self.mode = MODE_SAVELOAD
+        elif ix == 11:
             # Exit to title screen
             self.title_index = 0
             self.mode = MODE_TITLE
@@ -4521,24 +4546,102 @@ class Game:
                 choice = self.dialog_menu_index
                 if choice == 0:  # Talk
                     npc = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {})
-                    lines = npc.get('talk', ["..."])
-                    self.dialog_text = list(lines) if isinstance(lines, list) else [str(lines)]
+                    # Scientist quest hook
+                    if str(self.dialog_npc_id) == 'scientist':
+                        qid = 'slime_research'
+                        st = self.quests_state.get(qid, 'not_started')
+                        if st == 'not_started':
+                            self.quests_state[qid] = 'active'
+                            intro = str(npc.get('talk_intro', "I'm researching slimes..."))
+                            self.dialog_text = [intro]
+                        elif st == 'active':
+                            lines = npc.get('talk_active', ["..."])
+                            ln = random.choice(lines) if isinstance(lines, list) and lines else "..."
+                            self.dialog_text = [str(ln)]
+                        else:  # completed
+                            lines = npc.get('talk_complete', ["Thank you again."])
+                            ln = random.choice(lines) if isinstance(lines, list) and lines else "Thank you again."
+                            self.dialog_text = [str(ln)]
+                    else:
+                        # 'talk' supports either a single string, or a list where each entry is
+                        # either a string (single-line) or a list of strings (multi-line).
+                        t = npc.get('talk', ["..."])
+                        if isinstance(t, list) and t:
+                            pick = random.choice(t)
+                            if isinstance(pick, list):
+                                self.dialog_text = [str(x) for x in pick]
+                            else:
+                                self.dialog_text = [str(pick)]
+                        else:
+                            self.dialog_text = [str(t)]
                     self.dialog_phase = 'talk'
                     self.dialog_line_ix = 0
                     self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
                     self.dialog_typer_prev_chars = 0
                 elif choice == 1:  # Item (simple placeholder)
-                    self.dialog_text = ["You offer an item, but they shake their head."]
-                    self.dialog_phase = 'talk'
-                    self.dialog_line_ix = 0
-                    self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
-                    self.dialog_typer_prev_chars = 0
+                    # Open inventory (condensed list) for presentation to NPC
+                    self.dialog_item_ix = 0
+                    self.dialog_phase = 'item'
                 else:  # Leave
                     self.dialog_active = False
                     self.mode = MODE_MAZE
             elif event.key == pygame.K_ESCAPE:
                 self.dialog_active = False
                 self.mode = MODE_MAZE
+        elif self.dialog_phase == 'item':
+            # Present item selection: condensed inventory + Back
+            # Build condensed inventory with unique order
+            ordered: List[str] = []
+            seen: set = set()
+            for iid in self.party.inventory:
+                if iid not in seen:
+                    seen.add(iid); ordered.append(iid)
+            n = max(1, len(ordered) + 1)
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.dialog_item_ix = (self.dialog_item_ix - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.dialog_item_ix = (self.dialog_item_ix + 1) % n
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                # Back
+                if self.dialog_item_ix == len(ordered):
+                    # Return to description
+                    self.dialog_phase = 'root'
+                    self.dialog_desc_typing = False
+                else:
+                    iid = ordered[self.dialog_item_ix]
+                    # NPC-specific reactions
+                    resp = "They don't seem interested."
+                    handled = False
+                    if str(self.dialog_npc_id) == 'scientist':
+                        qid = 'slime_research'
+                        st = self.quests_state.get(qid, 'not_started')
+                        if st == 'active' and iid == 'droplet':
+                            # consume droplet and reward
+                            try:
+                                self.party.inventory.remove('droplet')
+                            except ValueError:
+                                pass
+                            self.party.inventory.append('serum')
+                            self.quests_state[qid] = 'completed'
+                            resp = str((self.quests_data.get(qid) or {}).get('complete_text', 'Quest Complete!'))
+                            handled = True
+                        elif st == 'not_started':
+                            resp = "I'm not sure what to do with that yet."
+                        elif st == 'completed':
+                            resp = "Thank you again; my work continues."
+                    if not handled:
+                        # generic or rejection
+                        pass
+                    # Show response as talk and then return to root
+                    self.dialog_text = [resp]
+                    self.dialog_phase = 'talk'
+                    self.dialog_line_ix = 0
+                    self.dialog_type_t0 = pygame.time.get_ticks(); self.dialog_type_chars = 0
+                    self.dialog_typer_prev_chars = 0
+            elif event.key == pygame.K_ESCAPE:
+                # Cancel -> back to description
+                self.dialog_phase = 'root'
+                self.dialog_desc_typing = False
         elif self.dialog_phase == 'talk':
             # Enter advances typewriter/line; Esc leaves
             if event.key == pygame.K_ESCAPE:
@@ -4682,6 +4785,156 @@ class Game:
                 prefix = '> ' if is_sel else '  '
                 self.r.text(view, prefix + o, (mx, menu_y), color)
                 menu_y += text_h + 6
+        elif self.dialog_phase == 'item':
+            # Inventory selection list
+            # Build condensed list
+            ordered: List[str] = []
+            counts: Dict[str, int] = {}
+            for iid in self.party.inventory:
+                if iid not in counts:
+                    counts[iid] = 1; ordered.append(iid)
+                else:
+                    counts[iid] += 1
+            labels = []
+            for iid in ordered:
+                name = ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid)
+                c = counts.get(iid, 1)
+                labels.append(f"{name} x{c}" if c > 1 else name)
+            options = labels + ["Back"]
+            n = max(1, len(options))
+            # Draw centered
+            pad_x2, pad_y2 = 12, 10
+            text_w = max(self.r.font.size(s + "  ")[0] for s in options) if options else 200
+            text_h2 = self.r.font.get_height()
+            w2 = text_w + pad_x2 * 2
+            h2 = text_h2 * n + pad_y2 * 2
+            x2 = WIDTH // 2 - w2 // 2
+            y2 = y + h + 12
+            rect2 = pygame.Rect(x2, y2, w2, h2)
+            pygame.draw.rect(view, (16,16,20), rect2)
+            pygame.draw.rect(view, YELLOW, rect2, 2)
+            cy2 = y2 + pad_y2
+            for i, s in enumerate(options):
+                is_sel = (i == self.dialog_item_ix)
+                prefix = '> ' if is_sel else '  '
+                color = YELLOW if is_sel else WHITE
+                self.r.text(view, prefix + s, (x2 + pad_x2, cy2), color)
+                cy2 += text_h2
+
+    # --------------- Quests ---------------
+    def draw_quests(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((18, 18, 24))
+        self.r.text_big(view, "Active Quests", (20, 16))
+        # Build active quests list only
+        all_q = (getattr(self, 'quests_data', {}) or {})
+        state = (getattr(self, 'quests_state', {}) or {})
+        qlist = [(qid, q) for qid, q in all_q.items() if state.get(qid, 'not_started') == 'active']
+        qlist = sorted(qlist, key=lambda x: str(x[1].get('name', '')))
+        if not qlist:
+            self.r.text(view, "(No active quests)", (32, 60), GRAY)
+            self.r.text_small(view, "Esc: Back", (32, VIEW_H - 28), LIGHT)
+            return
+        # Clamp index
+        try:
+            self.quests_index = int(self.quests_index)
+        except Exception:
+            self.quests_index = 0
+        if qlist:
+            self.quests_index %= max(1, len(qlist))
+        # Left column: list
+        y = 56
+        for i, (qid, q) in enumerate(qlist):
+            st = (getattr(self, 'quests_state', {}) or {}).get(qid, 'not_started')
+            label = f"{i+1:>2}. {q.get('name', qid)}"
+            col = YELLOW if st == 'active' else WHITE
+            prefix = "> " if i == self.quests_index else "  "
+            self.r.text(view, prefix + label, (32, y), col if i != self.quests_index else YELLOW)
+            y += 22
+        # Right column: description for selected
+        if qlist:
+            qid, q = qlist[self.quests_index]
+            st = (getattr(self, 'quests_state', {}) or {}).get(qid, 'not_started')
+            # Panel
+            rx = WIDTH // 2
+            ry = 56
+            rw = WIDTH - rx - 24
+            rh = VIEW_H - ry - 56
+            rect = pygame.Rect(rx, ry, rw, rh)
+            pygame.draw.rect(view, (20, 20, 26), rect)
+            pygame.draw.rect(view, YELLOW, rect, 2)
+            pad_x, pad_y = 14, 12
+            name = str(q.get('name', qid))
+            status_map = {'not_started': 'Not started', 'active': 'Active', 'completed': 'Completed'}
+            st_text = status_map.get(st, st)
+            self.r.text_big(view, name, (rx + pad_x, ry + pad_y), YELLOW)
+            self.r.text_small(view, f"Status: {st_text}", (rx + pad_x, ry + pad_y + 30), LIGHT)
+            # Description text
+            desc = str(q.get('desc', ''))
+            lines = self._wrap_text(desc, rw - pad_x * 2)
+            cy = ry + pad_y + 60
+            for ln in lines:
+                self.r.text(view, ln, (rx + pad_x, cy))
+                cy += self.r.font.get_height()
+        # Hint
+        self.r.text_small(view, "Up/Down: Select   Enter: View   Esc: Back", (32, VIEW_H - 28), LIGHT)
+
+        # Popup view (optional)
+        if getattr(self, 'quests_popup', False) and qlist:
+            # Dim
+            s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            s.fill((0, 0, 0, 160))
+            view.blit(s, (0, 0))
+            # Centered box with full text
+            qid, q = qlist[self.quests_index]
+            title = str(q.get('name', qid))
+            desc = str(q.get('desc', ''))
+            padx, pady = 16, 12
+            text_h = self.r.font.get_height()
+            # Rough width
+            max_w = WIDTH - 200
+            wrapped = self._wrap_text(desc, max_w - padx * 2)
+            w = max(self.r.font_big.size(title)[0], max((self.r.font.size(ln)[0] for ln in wrapped), default=200)) + padx * 2
+            h = text_h * (len(wrapped) + 4) + pady * 2
+            x = WIDTH // 2 - w // 2
+            y = VIEW_H // 2 - h // 2
+            rect = pygame.Rect(x, y, w, h)
+            pygame.draw.rect(view, (16, 16, 22), rect)
+            pygame.draw.rect(view, YELLOW, rect, 2)
+            self.r.text_big(view, title, (x + padx, y + pady), YELLOW)
+            cy = y + pady + text_h + 12
+            for ln in wrapped:
+                self.r.text(view, ln, (x + padx, cy))
+                cy += text_h
+            self.r.text_small(view, "Enter/Esc: Close", (x + padx, y + h - pady - text_h), LIGHT)
+
+    def quests_input(self, event):
+        if event.type != pygame.KEYDOWN:
+            return
+        # Build list for bounds
+        all_q = (getattr(self, 'quests_data', {}) or {})
+        state = (getattr(self, 'quests_state', {}) or {})
+        qlist = [(qid, q) for qid, q in all_q.items() if state.get(qid, 'not_started') == 'active']
+        qlist = sorted(qlist, key=lambda x: str(x[1].get('name', '')))
+        n = max(1, len(qlist))
+        if getattr(self, 'quests_popup', False):
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
+                self.quests_popup = False
+            return
+        if event.key in (pygame.K_UP, pygame.K_k):
+            self.quests_index = (self.quests_index - 1) % n
+            self.sfx.play('ui_move', 0.5)
+        elif event.key in (pygame.K_DOWN, pygame.K_j):
+            self.quests_index = (self.quests_index + 1) % n
+            self.sfx.play('ui_move', 0.5)
+        elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+            # Open popup view (optional)
+            if qlist:
+                self.quests_popup = True
+            self.sfx.play('ui_select', 0.6)
+        elif event.key == pygame.K_ESCAPE:
+            # Return to town
+            self.mode = MODE_TOWN
 
     def draw_door_confirm(self):
         if not getattr(self, 'door_confirm_active', False):
@@ -4984,6 +5237,13 @@ class Game:
                 target.mp = min(target.max_mp, target.mp + gain)
                 verb = 'drinks'
                 self.log.add(f"{target.name} {verb} {name} (+{target.mp - before} MP).")
+            # Max MP increase (permanent)
+            elif 'max_mp_up' in it:
+                inc = int(it.get('max_mp_up', 0))
+                before = target.max_mp
+                target.max_mp = max(0, before + inc)
+                target.mp = min(target.max_mp, target.mp + inc)
+                self.log.add(f"{target.name} uses {name} (+{inc} Max MP).")
         else:
             self.log.add("Nothing happens.")
 
@@ -6356,6 +6616,8 @@ class Game:
                         self.battle_input(event)
                     elif self.mode == MODE_DIALOG:
                         self.dialog_input(event)
+                    elif self.mode == MODE_QUESTS:
+                        self.quests_input(event)
                     elif self.mode == MODE_TRAIT:
                         self.trait_input(event)
 
@@ -6411,6 +6673,8 @@ class Game:
                     self.draw_battle()
                 elif self.mode == MODE_DIALOG:
                     self.draw_dialog()
+                elif self.mode == MODE_QUESTS:
+                    self.draw_quests()
                 elif self.mode == MODE_TRAIT:
                     self.draw_trait()
 

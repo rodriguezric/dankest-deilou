@@ -657,6 +657,11 @@
       "x": 2,
       "y": 1,
       "id": "guide"
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "id": "scientist"
     }
   ],
   "elites": [
