@@ -3118,6 +3118,7 @@ class Game:
             self.mode = MODE_ITEMS
         elif ix == 9:
             # Quests screen
+            self.return_mode = MODE_TOWN
             self.mode = MODE_QUESTS
             self.quests_index = 0
             self.quests_popup = False
@@ -4933,8 +4934,9 @@ class Game:
                 self.quests_popup = True
             self.sfx.play('ui_select', 0.6)
         elif event.key == pygame.K_ESCAPE:
-            # Return to town
-            self.mode = MODE_TOWN
+            # Return to previous mode (Town from town menu, Pause/Maze otherwise)
+            ret = getattr(self, 'return_mode', MODE_TOWN)
+            self.mode = ret
 
     def draw_door_confirm(self):
         if not getattr(self, 'door_confirm_active', False):
@@ -5031,7 +5033,7 @@ class Game:
             self.r.draw_center_menu(["Yes", "No"], self.pause_confirm_index)
         else:
             self.r.text_big(view, "Menu", (WIDTH//2 - 40, 80))
-            opts = ["Status", "Items", "Equip", "Quit", "Close"]
+            opts = ["Status", "Items", "Equip", "Quests", "Quit", "Close"]
             y = 140
             for i, opt in enumerate(opts):
                 prefix = "> " if i == self.pause_index else "  "
@@ -5056,10 +5058,11 @@ class Game:
                     self.pause_confirming_quit = False
                     self.mode = MODE_MAZE
             else:
+                opts_len = 6
                 if event.key in (pygame.K_UP, pygame.K_k):
-                    self.pause_index = (self.pause_index - 1) % 5
+                    self.pause_index = (self.pause_index - 1) % opts_len
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
-                    self.pause_index = (self.pause_index + 1) % 5
+                    self.pause_index = (self.pause_index + 1) % opts_len
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     if self.pause_index == 0:
                         self.return_mode = MODE_PAUSE
@@ -5078,10 +5081,16 @@ class Game:
                         self.return_mode = MODE_PAUSE
                         self.mode = MODE_EQUIP
                     elif self.pause_index == 3:
+                        # Quests from labyrinth; return to Pause when exiting
+                        self.return_mode = MODE_PAUSE
+                        self.quests_index = 0
+                        self.quests_popup = False
+                        self.mode = MODE_QUESTS
+                    elif self.pause_index == 4:
                         # Quit -> confirm prompt
                         self.pause_confirming_quit = True
                         self.pause_confirm_index = 1  # default to No
-                    elif self.pause_index == 4:
+                    elif self.pause_index == 5:
                         self.mode = MODE_MAZE
                 elif event.key == pygame.K_ESCAPE:
                     self.mode = MODE_MAZE
