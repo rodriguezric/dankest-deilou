@@ -1576,10 +1576,10 @@ class Battle:
                 if a.level >= 1: skills.append(('spell', 'Spark'))
                 if a.level >= 3: skills.append(('surge', 'Surge'))
                 if a.level >= 5: skills.append(('storm', 'Storm'))
-            # Filter by resource availability (e.g., MP > 0 for mana skills)
+            # All skills require 1 MP: hide if no MP
             filt: List[Tuple[str, str]] = []
             for sid, label in skills:
-                if sid in ('spell', 'heal') and a.mp <= 0:
+                if a.mp <= 0:
                     continue
                 filt.append((sid, label))
             self.skill_options = filt
@@ -1829,10 +1829,10 @@ class Battle:
             if a.level >= 3: skills.append(('surge', 'Surge'))
             if a.level >= 5: skills.append(('storm', 'Storm'))
         # Could add more per-class skills here later
-        # Filter by resource availability (e.g., MP > 0)
+        # All skills require 1 MP: hide if no MP
         filt: List[Tuple[str, str]] = []
         for sid, label in skills:
-            if sid in ('spell', 'heal') and a.mp <= 0:
+            if a.mp <= 0:
                 continue
             filt.append((sid, label))
         self.skill_options = filt
@@ -1933,14 +1933,20 @@ class Battle:
 
     def make_skill_action(self, actor: Character, target_i: Optional[int], sid: str) -> Optional[Dict[str, Any]]:
         gi = self.party.members.index(actor)
+        # All skills require 1 MP
+        if actor.mp <= 0:
+            return None
         # Map skills into actions
         if sid in ('sunder','rush','combo','backstab','dust') and target_i is None:
             return None
         if sid in ('flashbang','surge','storm'):
+            actor.mp -= 1
             return {'type': sid, 'actor_side': 'party', 'actor_index': gi}
         if sid in ('regen','mend'):
+            actor.mp -= 1
             return {'type': sid, 'actor_side': 'party', 'actor_index': gi, 'target_side': 'party', 'target_index': target_i}
         if sid in ('sunder','rush','combo','backstab','dust'):
+            actor.mp -= 1
             return {'type': sid, 'actor_side': 'party', 'actor_index': gi, 'target_side': 'enemy', 'target_index': target_i}
         return None
 
