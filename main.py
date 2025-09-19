@@ -435,6 +435,7 @@ class Enemy:
     id: str
     name: str
     hp: int
+    max_hp: int
     ac: int
     atk_low: int
     atk_high: int
@@ -518,7 +519,7 @@ class Enemy:
                 atk_low = int(round(atk_low * 1.25)); atk_high = int(round(atk_high * 1.35))
             # Build enemy
             return Enemy(
-                id=eid, name=name, hp=int(hp), ac=int(ac), atk_low=int(atk_low), atk_high=int(atk_high),
+                id=eid, name=name, hp=int(hp), max_hp=int(hp), ac=int(ac), atk_low=int(atk_low), atk_high=int(atk_high),
                 exp=0, gold_low=gold_low, gold_high=gold_high, agi=int(agi), drops=drops,
             )
 
@@ -537,6 +538,7 @@ class Enemy:
         return Enemy(
             id=eid, name=name,
             hp=hp,
+            max_hp=hp,
             ac=int(base.get("ac", 8)),
             atk_low=int(base.get("atk_low", 1)),
             atk_high=int(base.get("atk_high", 4)),
@@ -1704,6 +1706,46 @@ class Battle:
             else:
                 return {'type': 'run_enemy', 'actor_side': 'enemy', 'actor_index': ix,
                         'label': f"{e.name} looks for an escape!"}
+        # Goblin Chief
+        if mid == 'goblin_chief':
+            # If alone, summon two goblins (war cry)
+            alive_idxs = [i for i, en in enumerate(self.enemies) if en.hp > 0]
+            if len(alive_idxs) == 1 and alive_idxs[0] == ix:
+                return {'type': 'summon', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} lets out a war cry!"}
+            # If below 50% HP and any goblin present, devour one to heal
+            try:
+                if e.hp < max(1, int(0.5 * e.max_hp)):
+                    goblins = [j for j, en in enumerate(self.enemies) if en.hp > 0 and en.id == 'goblin']
+                    if goblins:
+                        # choose the fattest goblin for max heal
+                        target_j = max(goblins, key=lambda j: self.enemies[j].hp)
+                        return {'type': 'goblin_devour', 'actor_side': 'enemy', 'actor_index': ix,
+                                'target_enemy_index': target_j,
+                                'label': f"{e.name} devours a goblin!"}
+            except Exception:
+                pass
+            # If any goblins present, throw one at the party
+            goblins = [j for j, en in enumerate(self.enemies) if en.hp > 0 and en.id == 'goblin']
+            if goblins:
+                gj = random.choice(goblins)
+                # choose party target among alive actives
+                targets = self.party.alive_active_members()
+                if not targets:
+                    self.finish_defeat(); return None
+                t = random.choice(targets)
+                gi = self.party.members.index(t)
+                dmg = max(1, int(self.enemies[gj].hp))
+                return {'type': 'goblin_throw', 'actor_side': 'enemy', 'actor_index': ix,
+                        'g_index': gj, 'target_side': 'party', 'target_index': gi, 'dmg': dmg,
+                        'label': f"{e.name} hurls a goblin at {t.name}!"}
+            # Otherwise, attack
+            hit = random.random() < 0.7
+            dmg = random.randint(e.atk_low + 1, e.atk_high + 2)
+            return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                    'target_side': 'party', 'target_index': gi,
+                    'hit': hit, 'dmg': dmg, 'label': f"{e.name} strikes {t.name}",
+                    'miss_label': f"{e.name} misses {t.name}."}
         # Fallback: attack
         hit = random.random() < 0.65
         dmg = random.randint(e.atk_low, e.atk_high)
@@ -1822,6 +1864,17 @@ class Battle:
         # Slime 'splash' (spray) projectile travel time
         if action.get('type') == 'splash':
             self.anim['dur'] = [240, 1000, 240, 180]
+        # Goblin chief custom timings
+        if action.get('type') == 'goblin_devour':
+            # Move to goblin, eat, return
+            self.anim['dur'] = [200, 380, 240, 200]
+        if action.get('type') == 'goblin_throw':
+            # Hop to goblin during windup; throw projectile during pre (same as Spark)
+            self.anim['dur'] = [240, 1000, 240, 180]
+            try:
+                if self.sfx: self.sfx.play('miss', 0.6)
+            except Exception:
+                pass
         # Skill-specific timing/feel
         if action.get('type') in ('sunder',):
             # normal hit cadence like attack
@@ -2027,6 +2080,88 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(act.get('miss_label', 'The attack misses.'))
+        elif act['type'] == 'summon':
+            ai = act.get('actor_index', -1)
+            if 0 <= ai < len(self.enemies):
+                # Only summon if still alone (avoid overfilling if interrupted)
+                alive = [i for i, e in enumerate(self.enemies) if e.hp > 0]
+                if len(alive) == 1 and alive[0] == ai:
+                    label = act.get('label')
+                    if label:
+                        self.log.add(label)
+                    base = self.monsters_by_id.get('goblin', {})
+                    if base:
+                        left = Enemy.from_base(base, floor_num=self.floor_num)
+                        right = Enemy.from_base(base, floor_num=self.floor_num)
+                        # Keep reference to the chief object to find it after insertion
+                        chief_obj = self.enemies[ai]
+                        # Insert left and right around chief
+                        self.enemies.insert(ai, left)
+                        # Find new index of chief (shifted by +1)
+                        try:
+                            ai = self.enemies.index(chief_obj)
+                        except ValueError:
+                            pass
+                        self.enemies.insert(ai + 1, right)
+                        self.log.add("Two goblins join the fray!")
+                        # Rebuild turn order to include new goblins
+                        self.build_turn_order()
+                        # Keep current token on the chief (if present)
+                        for pos, tok in enumerate(self.turn_order):
+                            if tok == ('enemy', ai):
+                                self.turn_pos = pos
+                                break
+        elif act['type'] == 'goblin_devour':
+            ai = act.get('actor_index', -1)
+            ti = act.get('target_enemy_index', -1)
+            if 0 <= ai < len(self.enemies) and 0 <= ti < len(self.enemies):
+                chief = self.enemies[ai]
+                snack = self.enemies[ti]
+                if chief.hp > 0 and snack.hp > 0 and snack.id == 'goblin':
+                    heal = int(snack.hp)
+                    chief.hp = min(getattr(chief, 'max_hp', chief.hp + heal), chief.hp + heal)
+                    # kill goblin with a quick fade
+                    snack.hp = 0
+                    self.dying_enemies[ti] = {'start': pygame.time.get_ticks(), 'dur': 500}
+                    self.add_floater('enemy', ai, f"+{heal}", 800, YELLOW)
+                    try:
+                        self.sfx.play('heal', 0.6)
+                    except Exception:
+                        pass
+                    self.log.add(f"{chief.name} devours a goblin and recovers {heal} HP!")
+                    # Rebuild order to remove the downed goblin from initiative
+                    self.build_turn_order()
+        elif act['type'] == 'goblin_throw':
+            ai = act.get('actor_index', -1)
+            gi = act.get('target_index', -1)
+            gix = act.get('g_index', -1)
+            dmg = max(1, int(act.get('dmg', 1)))
+            # Kill goblin and damage party target
+            if 0 <= gix < len(self.enemies):
+                self.enemies[gix].hp = 0
+                self.dying_enemies[gix] = {'start': pygame.time.get_ticks(), 'dur': 500}
+            if 0 <= gi < len(self.party.members):
+                t = self.party.members[gi]
+                # apply defend/vulnerable like attack
+                if gi in self.party_defending:
+                    dmg = max(1, int(math.ceil(dmg * 0.5)))
+                if self._status_get('party', gi, 'vulnerable') > 0:
+                    dmg = max(1, int(math.ceil(dmg * 1.5)))
+                t.hp -= dmg
+                try:
+                    self.sfx.play('party_hurt', 0.7)
+                except Exception:
+                    pass
+                self.add_floater('party', gi, str(dmg), 800, WHITE)
+                if t.hp <= 0:
+                    t.hp = 0
+                    t.alive = False
+                    self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                self.effects.trigger('party', gi, 300, 7)
+                chief = self.enemies[ai] if 0 <= ai < len(self.enemies) else None
+                self.log.add(act.get('label', f"A goblin hits {t.name} for {dmg}."))
+            # Rebuild order to remove the thrown goblin from initiative
+            self.build_turn_order()
         elif act['type'] == 'defend':
             gi = act.get('actor_index')
             if gi is not None:
@@ -5866,6 +6001,57 @@ class Game:
                     elif stage == 3:
                         offsets_enemy[ai] = int(dy_full * (1.0 - p))
                         offsets_enemy_x[ai] = int(dx_full * (1.0 - p))
+                elif act.get('type') == 'goblin_devour' and len(durs) >= 4:
+                    # Move horizontally to the target goblin, slight bump, then back
+                    tgt = act.get('target_enemy_index')
+                    gap = 16
+                    alive_e = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                    # Ensure both indices are represented for layout purposes
+                    if ai not in alive_e: alive_e.append(ai)
+                    if tgt not in alive_e: alive_e.append(tgt)
+                    alive_e = sorted(set(alive_e))
+                    ne = max(1, len(alive_e))
+                    we = min(220, (WIDTH - gap * (ne + 1)) // max(1, ne))
+                    total_e = ne * we + (ne + 1) * gap
+                    xse = (WIDTH - total_e) // 2 + gap
+                    j_ai = alive_e.index(ai) if ai in alive_e else 0
+                    j_tg = alive_e.index(tgt) if tgt in alive_e else 0
+                    src_cx = xse + j_ai * (we + gap) + we // 2
+                    dst_cx = xse + j_tg * (we + gap) + we // 2
+                    dx_full = dst_cx - src_cx
+                    if stage == 1:
+                        offsets_enemy[ai] = 0
+                        offsets_enemy_x[ai] = int(dx_full * (p * p))
+                    elif stage == 2:
+                        offsets_enemy[ai] = int(8 * abs(math.sin(p * math.pi)))
+                        offsets_enemy_x[ai] = dx_full
+                    elif stage == 3:
+                        offsets_enemy[ai] = 0
+                        offsets_enemy_x[ai] = int(dx_full * (1.0 - p))
+                elif act.get('type') == 'goblin_throw' and len(durs) >= 4:
+                    # During windup, hop towards the goblin to pick it up; during projectile, hide source goblin
+                    gix = act.get('g_index')
+                    gap = 16
+                    alive_e = [i for i, e in enumerate(b.enemies) if e.hp > 0]
+                    if ai not in alive_e: alive_e.append(ai)
+                    if gix not in alive_e: alive_e.append(gix)
+                    alive_e = sorted(set(alive_e))
+                    ne = max(1, len(alive_e))
+                    we = min(220, (WIDTH - gap * (ne + 1)) // max(1, ne))
+                    total_e = ne * we + (ne + 1) * gap
+                    xse = (WIDTH - total_e) // 2 + gap
+                    j_ai = alive_e.index(ai) if ai in alive_e else 0
+                    j_g = alive_e.index(gix) if gix in alive_e else 0
+                    src_cx = xse + j_ai * (we + gap) + we // 2
+                    gob_cx = xse + j_g * (we + gap) + we // 2
+                    dx_full = gob_cx - src_cx
+                    if stage == 0:
+                        offsets_enemy_x[ai] = int(dx_full * (p * p))
+                    elif stage == 1:
+                        # hide goblin window while in flight
+                        offsets_enemy_x[gix] = offsets_enemy_x.get(gix, 0) + 2000
+                    elif stage == 3:
+                        offsets_enemy_x[ai] = int(dx_full * (1.0 - p))
                 else:
                     offsets_enemy[ai] = off + extra_bounce_e
             # If an attack/spell missed, slide the target sideways on impact and return during recover
@@ -6027,6 +6213,43 @@ class Game:
                             # Main circle outline
                             pygame.draw.circle(trail, GREEN, (int(cx), int(cy)), 10, 2)
                         view.blit(trail, (0, 0))
+            # Goblin Chief throw: spin the goblin window towards the party target (Spark-like speed)
+            elif act.get('type') == 'goblin_throw' and act.get('actor_side') == 'enemy':
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 1:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = 0.0
+                    if dur > 0:
+                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    ai = act.get('actor_index')
+                    gix = act.get('g_index')
+                    ti = act.get('target_index')
+                    # Start from the Goblin Chief's window so it looks like he throws it
+                    src_rect = enemy_rects.get(ai)
+                    dst_rect = party_rects.get(ti)
+                    if src_rect and dst_rect:
+                        sx, sy = src_rect.centerx, src_rect.centery
+                        ex, ey = dst_rect.centerx, dst_rect.centery
+                        pe = p * p * p
+                        cx = sx + (ex - sx) * pe
+                        cy = sy + (ey - sy) * pe
+                        # Render a temp enemy card for the goblin and spin it
+                        w, h = src_rect.width, src_rect.height
+                        temp = pygame.Surface((w, h), pygame.SRCALPHA)
+                        pygame.draw.rect(temp, (20, 20, 28), temp.get_rect())
+                        pygame.draw.rect(temp, YELLOW, temp.get_rect(), 2)
+                        name = b.enemies[gix].name[:14] if (0 <= gix < len(b.enemies)) else 'Goblin'
+                        temp.blit(self.r.font.render(name, True, YELLOW), (8, 6))
+                        hp_txt = max(0, int(act.get('dmg', 1)))
+                        temp.blit(self.r.font_small.render(f"HP {hp_txt:>2}", True, WHITE), (8, 26))
+                        spin = (now / 500.0) % (2 * math.pi)
+                        ang = spin * 360.0 / (2 * math.pi) * 2.0
+                        rot = pygame.transform.rotate(temp, ang)
+                        rrect = rot.get_rect(center=(int(cx), int(cy)))
+                        view.blit(rot, rrect.topleft)
             # Backstab fade effect: fade out then fade in near target during pre stage
             if act.get('type') == 'backstab' and act.get('actor_side') == 'party':
                 stage = b.anim.get('stage', 0)
