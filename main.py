@@ -6111,8 +6111,27 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Slightly brighter base to make background more visible
         view.fill((14, 14, 22))
-        # Background: subtle ripple rings (like water drips)
-        self.draw_battle_ripples(view)
+        # Determine if special silence background should override regular effects
+        censor_fx_draw: Optional[Dict[str, Any]] = None
+        censor_plain_bg = False
+        if b and getattr(b, 'is_censor_battle', False) and getattr(b, 'censor_pulse_disabled', False):
+            # Silence cast: plain dark background with slow gray pulses
+            view.fill((30, 30, 34))
+            now = pygame.time.get_ticks()
+            base_centers = [(WIDTH // 2, VIEW_H // 3), (WIDTH // 2, VIEW_H * 2 // 3), (WIDTH // 2, VIEW_H // 2)]
+            radii = [110, 170, 230]
+            for idx, (cx, cy) in enumerate(base_centers):
+                rad = radii[idx % len(radii)]
+                puls = 0.15 + 0.1 * math.sin((now / 1800.0) + idx)
+                current_r = int(rad * (0.85 + puls))
+                alpha = int(40 + 40 * abs(math.sin(now / 2000.0 + idx * 0.7)))
+                overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                pygame.draw.circle(overlay, (90, 90, 100, alpha), (cx, cy), max(10, current_r), 4)
+                view.blit(overlay, (0, 0))
+            censor_plain_bg = True
+        else:
+            # Background: subtle ripple rings (like water drips)
+            self.draw_battle_ripples(view)
         censor_fx_draw: Optional[Dict[str, Any]] = None
         had_censor_noise = False
         if b and getattr(b, 'is_censor_battle', False):
