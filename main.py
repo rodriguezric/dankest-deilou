@@ -1806,7 +1806,8 @@ class Battle:
                 return {'type': 'spell', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
                         'hit': True, 'dmg': dmg,
-                        'label': f"{e.name} casts Spark for {dmg}!"}
+                        'label': f"{e.name} unleashes Mana Surge for {dmg}!",
+                        'spell_id': 'mana_surge'}
             # Otherwise: choose regular attack or Mana Burn
             if random.random() < 0.5:
                 target = self.party.members[gi]
@@ -6560,6 +6561,21 @@ class Game:
         enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog, offsets_enemy, offsets_enemy_x, rotations_enemy) if b else {}
         party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting, offsets_party, offsets_party_x)
 
+        def render_purple_burst(rect: Optional[pygame.Rect], prog: float, scale: float = 1.0, color: Tuple[int, int, int] = (190, 120, 255)):
+            if not rect:
+                return
+            cx, cy = rect.centerx, rect.centery
+            base_radius = rect.width * 0.3 * scale
+            tip_radius = base_radius * (1.2 + 1.6 * prog)
+            tri_angle = 0.45
+            count = max(6, int(14 * scale))
+            for i in range(count):
+                ang = (2 * math.pi * i / count) + (prog * math.pi)
+                tip = (cx + math.cos(ang) * tip_radius, cy + math.sin(ang) * tip_radius)
+                left = (cx + math.cos(ang - tri_angle) * base_radius, cy + math.sin(ang - tri_angle) * base_radius)
+                right = (cx + math.cos(ang + tri_angle) * base_radius, cy + math.sin(ang + tri_angle) * base_radius)
+                pygame.draw.polygon(view, color, [tip, left, right])
+
         # Spell projectile (Spark): rotating triangle from caster to target during pre stage
         if b and b.state == 'anim' and b.anim:
             act = b.anim['action']
@@ -6596,31 +6612,60 @@ class Game:
                         pe = p * p * p
                         cx = sx + (ex - sx) * pe
                         cy = sy + (ey - sy) * pe
-                        # Triangle pointing towards target, rotating slightly over time (equilateral)
-                        base_size = 16
+                        spell_id = str(act.get('spell_id', 'spark'))
                         ang = math.atan2(ey - sy, ex - sx)
-                        spin = (now / 500.0) % (2 * math.pi)
-                        theta = ang + spin
-                        # Trail: draw semi-transparent filled triangles at prior positions
-                        trail = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
-                        for k in range(1, 6):
-                            tk = p - k * 0.06
-                            if tk <= 0:
-                                continue
-                            tke = tk * tk
-                            tx = sx + (ex - sx) * tke
-                            ty = sy + (ey - sy) * tke
-                            size_k = max(6, int(base_size * (0.85 ** k)))
-                            tip_k = (tx + math.cos(theta) * size_k, ty + math.sin(theta) * size_k)
-                            left_k = (tx + math.cos(theta + 2.0 * math.pi / 3.0) * size_k, ty + math.sin(theta + 2.0 * math.pi / 3.0) * size_k)
-                            right_k = (tx + math.cos(theta - 2.0 * math.pi / 3.0) * size_k, ty + math.sin(theta - 2.0 * math.pi / 3.0) * size_k)
-                            alpha = max(20, 120 - k * 18)
-                            pygame.draw.polygon(trail, (240, 220, 80, alpha), [tip_k, left_k, right_k])
-                        view.blit(trail, (0, 0))
-                        tip = (cx + math.cos(theta) * base_size, cy + math.sin(theta) * base_size)
-                        left = (cx + math.cos(theta + 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta + 2.0 * math.pi / 3.0) * base_size)
-                        right = (cx + math.cos(theta - 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta - 2.0 * math.pi / 3.0) * base_size)
-                        pygame.draw.polygon(view, YELLOW, [tip, left, right], 2)
+                        if actor_side == 'enemy' and spell_id == 'mana_surge':
+                            base_size = 22
+                            spin = (now / 380.0) % (2 * math.pi)
+                            theta = ang + spin
+
+                            def pentagon_points(cx_: float, cy_: float, radius: float, angle_: float) -> List[Tuple[float, float]]:
+                                pts = []
+                                for idx in range(5):
+                                    a = angle_ + idx * (2 * math.pi / 5.0)
+                                    pts.append((cx_ + math.cos(a) * radius, cy_ + math.sin(a) * radius))
+                                return pts
+
+                            trail = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                            for k in range(1, 9):
+                                tk = p - k * 0.05
+                                if tk <= 0:
+                                    continue
+                                tke = tk * tk
+                                tx = sx + (ex - sx) * tke
+                                ty = sy + (ey - sy) * tke
+                                size_k = max(8, int(base_size * (0.9 ** k)))
+                                pts = pentagon_points(tx, ty, size_k, theta - k * 0.25)
+                                alpha = max(30, 150 - k * 14)
+                                pygame.draw.polygon(trail, (200, 150, 255, alpha), pts)
+                            view.blit(trail, (0, 0))
+                            main_pts = pentagon_points(cx, cy, base_size, theta)
+                            pygame.draw.polygon(view, (230, 180, 255), main_pts)
+                            inner_pts = pentagon_points(cx, cy, base_size * 0.55, theta + math.pi / 5.0)
+                            pygame.draw.polygon(view, (120, 60, 200), inner_pts, 2)
+                        else:
+                            base_size = 16
+                            spin = (now / 500.0) % (2 * math.pi)
+                            theta = ang + spin
+                            trail = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                            for k in range(1, 6):
+                                tk = p - k * 0.06
+                                if tk <= 0:
+                                    continue
+                                tke = tk * tk
+                                tx = sx + (ex - sx) * tke
+                                ty = sy + (ey - sy) * tke
+                                size_k = max(6, int(base_size * (0.85 ** k)))
+                                tip_k = (tx + math.cos(theta) * size_k, ty + math.sin(theta) * size_k)
+                                left_k = (tx + math.cos(theta + 2.0 * math.pi / 3.0) * size_k, ty + math.sin(theta + 2.0 * math.pi / 3.0) * size_k)
+                                right_k = (tx + math.cos(theta - 2.0 * math.pi / 3.0) * size_k, ty + math.sin(theta - 2.0 * math.pi / 3.0) * size_k)
+                                alpha = max(20, 120 - k * 18)
+                                pygame.draw.polygon(trail, (240, 220, 80, alpha), [tip_k, left_k, right_k])
+                            view.blit(trail, (0, 0))
+                            tip = (cx + math.cos(theta) * base_size, cy + math.sin(theta) * base_size)
+                            left = (cx + math.cos(theta + 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta + 2.0 * math.pi / 3.0) * base_size)
+                            right = (cx + math.cos(theta - 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta - 2.0 * math.pi / 3.0) * base_size)
+                            pygame.draw.polygon(view, YELLOW, [tip, left, right], 2)
             # Slime 'splash' visual: green circle projectiles to each party member
             elif act.get('type') == 'splash' and act.get('actor_side') == 'enemy':
                 stage = b.anim.get('stage', 0)
@@ -6713,31 +6758,34 @@ class Game:
                     if dur > 0:
                         p = max(0.0, min(1.0, (now - t0) / float(dur)))
 
-                    def draw_triangle_burst(rect: Optional[pygame.Rect], scale: float = 1.0, color: Tuple[int, int, int] = PURPLE):
-                        if not rect:
-                            return
-                        cx, cy = rect.centerx, rect.centery
-                        base_radius = rect.width * 0.3 * scale
-                        tip_radius = base_radius * (1.2 + 1.6 * p)
-                        tri_angle = 0.45
-                        count = max(6, int(14 * scale))
-                        for i in range(count):
-                            ang = (2 * math.pi * i / count) + (p * math.pi)
-                            tip = (cx + math.cos(ang) * tip_radius, cy + math.sin(ang) * tip_radius)
-                            left = (cx + math.cos(ang - tri_angle) * base_radius, cy + math.sin(ang - tri_angle) * base_radius)
-                            right = (cx + math.cos(ang + tri_angle) * base_radius, cy + math.sin(ang + tri_angle) * base_radius)
-                            pygame.draw.polygon(view, color, [tip, left, right])
-
                     # Primary target burst (full size)
                     gi = act.get('target_index')
                     primary_rect = party_rects.get(gi)
-                    draw_triangle_burst(primary_rect, 1.0, (190, 120, 255))
+                    render_purple_burst(primary_rect, p, 1.0, (190, 120, 255))
 
                     splash_list = act.get('splash', []) or []
                     for entry in splash_list:
                         s_gi = int(entry.get('gi', -1))
                         splash_rect = party_rects.get(s_gi)
-                        draw_triangle_burst(splash_rect, 0.5, (160, 110, 230))
+                        render_purple_burst(splash_rect, p, 0.5, (160, 110, 230))
+            elif act.get('type') == 'spell' and act.get('actor_side') == 'enemy' and act.get('spell_id') == 'mana_surge':
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 2:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = 0.0
+                    if dur > 0:
+                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    gi = act.get('target_index')
+                    primary_rect = party_rects.get(gi)
+                    render_purple_burst(primary_rect, p, 1.0, (190, 120, 255))
+                    splash_list = act.get('splash', []) or []
+                    for entry in splash_list:
+                        s_gi = int(entry.get('gi', -1))
+                        splash_rect = party_rects.get(s_gi)
+                        render_purple_burst(splash_rect, p, 0.5, (160, 110, 230))
             # Backstab fade effect: fade out then fade in near target during pre stage
             if act.get('type') == 'backstab' and act.get('actor_side') == 'party':
                 stage = b.anim.get('stage', 0)
