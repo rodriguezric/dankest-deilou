@@ -1384,6 +1384,44 @@ class Battle:
         self.goblin_steal_used: Dict[int, bool] = {}
         self.escaped_enemies: set = set()
         self.enemy_spin: Dict[int, Dict[str, int]] = {}
+        # Slime Mind (elite) support
+        self._slime_mind_ids = set(['slime_mind'])
+
+    # ----- Slime Mind helpers -----
+    def _spawn_slime_with_hp(self, around_index: int, hp: int):
+        """Spawn a new Slime enemy with current HP set to the given value.
+        Insert it adjacent to around_index and rebuild turn order.
+        """
+        try:
+            base = self.monsters_by_id.get('slime', {})
+            if not base:
+                return
+            new_e = Enemy.from_base(base, floor_num=self.floor_num)
+            new_e.hp = max(1, int(hp))
+            # Ensure display max >= current hp
+            try:
+                new_e.max_hp = max(int(getattr(new_e, 'max_hp', new_e.hp)), int(new_e.hp))
+            except Exception:
+                pass
+            insert_at = min(max(0, int(around_index) + 1), len(self.enemies))
+            self.enemies.insert(insert_at, new_e)
+            self.log.add("A new Slime oozes into the fight!")
+            self.build_turn_order()
+        except Exception:
+            pass
+
+    def _on_enemy_defeated(self, idx: int):
+        """Hook for enemy death to trigger Slime Mind regen on allied slime death."""
+        try:
+            if not (0 <= idx < len(self.enemies)):
+                return
+            died = self.enemies[idx]
+            if getattr(died, 'id', '') == 'slime':
+                for i, e in enumerate(self.enemies):
+                    if getattr(e, 'hp', 0) > 0 and getattr(e, 'id', '') in self._slime_mind_ids:
+                        self._status_set('enemy', i, 'regen', 2)
+        except Exception:
+            pass
 
     # ----- Status helpers -----
     def _status_get(self, side: str, ix: int, name: str) -> int:
@@ -1666,6 +1704,29 @@ class Battle:
                 # Pulse prepares Splash next turn
                 return {'type': 'pulse', 'actor_side': 'enemy', 'actor_index': ix,
                         'label': f"{e.name} pulses eerily..."}
+        # Slime Mind (elite)
+        if mid == 'slime_mind':
+            # If there are allied slimes, command them to splash.
+            slimes = [j for j, en in enumerate(self.enemies) if en.hp > 0 and en.id == 'slime']
+            if slimes:
+                # Splash more aggressively when below half HP
+                maxhp = max(1, int(getattr(e, 'max_hp', e.hp * 2)))
+                times = 3 if e.hp < max(1, int(0.5 * maxhp)) else 1
+                label = "Slime Mind orchestrates a torrent of splashes!" if times > 1 else "Slime Mind signals the slimes to splash!"
+                return {'type': 'slime_mass_splash', 'actor_side': 'enemy', 'actor_index': ix,
+                        'times': times, 'label': label}
+            # Otherwise, emote or basic attack while waiting to split
+            r = random.random()
+            if r < 0.5:
+                return {'type': 'emote', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} gurgles with malice."}
+            else:
+                hit = True
+                dmg = max(1, e.atk_low)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} lashes out at {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
         # Goblin
         if mid == 'goblin':
             # Adjusted probabilities if stolen
@@ -2049,10 +2110,21 @@ class Battle:
                             pass
                         # damage floater (enemy)
                         self.add_floater('enemy', i, str(dmg), 800, WHITE)
+                        # Slime Mind split-on-hit: on party Fight, if <2 slimes exist, spawn one with HP equal to damage dealt
+                        try:
+                            if act.get('type') == 'attack' and act.get('actor_side') == 'party':
+                                tgt = self.enemies[i]
+                                if getattr(tgt, 'id', '') == 'slime_mind':
+                                    alive_slimes = [j for j, en in enumerate(self.enemies) if en.hp > 0 and en.id == 'slime']
+                                    if len(alive_slimes) < 2:
+                                        self._spawn_slime_with_hp(i, dmg)
+                        except Exception:
+                            pass
                         if self.enemies[i].hp <= 0:
                             self.enemies[i].hp = 0
                             # start defeat animation
                             self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                            self._on_enemy_defeated(i)
                 else:
                     gi = act['target_index']
                     if 0 <= gi < len(self.party.members):
@@ -2129,6 +2201,7 @@ class Battle:
                     # kill goblin with a quick fade
                     snack.hp = 0
                     self.dying_enemies[ti] = {'start': pygame.time.get_ticks(), 'dur': 500}
+                    self._on_enemy_defeated(ti)
                     self.add_floater('enemy', ai, f"+{heal}", 800, YELLOW)
                     try:
                         self.sfx.play('heal', 0.6)
@@ -2146,6 +2219,7 @@ class Battle:
             if 0 <= gix < len(self.enemies):
                 self.enemies[gix].hp = 0
                 self.dying_enemies[gix] = {'start': pygame.time.get_ticks(), 'dur': 500}
+                self._on_enemy_defeated(gix)
             if 0 <= gi < len(self.party.members):
                 t = self.party.members[gi]
                 # apply defend/vulnerable like attack
@@ -2284,6 +2358,7 @@ class Battle:
                             if self.enemies[i].hp <= 0:
                                 self.enemies[i].hp = 0
                                 self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                                self._on_enemy_defeated(i)
                         else:
                             self.add_floater('enemy', i, 'MISS', 700, WHITE)
                     if act['type'] == 'sunder' and hit:
@@ -2302,6 +2377,7 @@ class Battle:
                     self.add_floater('enemy', i, str(dmg), 700, WHITE)
                     if e.hp <= 0:
                         e.hp = 0; self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                        self._on_enemy_defeated(i)
                 self.log.add(f"{self.party.members[a_ix].name} casts Surge for {total_dmg}.")
             elif act['type'] == 'storm':
                 total_dmg = 0
@@ -2317,6 +2393,7 @@ class Battle:
                     self.add_floater('enemy', i, str(dmg), 700, WHITE)
                     if self.enemies[i].hp <= 0:
                         self.enemies[i].hp = 0; self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                        self._on_enemy_defeated(i)
                 self.log.add(f"{self.party.members[a_ix].name} calls Storm for {total_dmg}.")
         elif act['type'] == 'pulse':
             ix = act.get('actor_index', -1)
@@ -2341,6 +2418,7 @@ class Battle:
                 e.hp = max(0, e.hp - hits)
                 if e.hp <= 0:
                     self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                    self._on_enemy_defeated(ix)
                 self.log.add(act.get('label', f"{e.name} splashes!"))
                 # play party hurt sfx once when splash lands
                 if hits > 0:
@@ -2352,6 +2430,37 @@ class Battle:
                 # Clear pulse flag
                 if ix in self.slime_pulsed:
                     self.slime_pulsed.pop(ix, None)
+        elif act['type'] == 'slime_mass_splash':
+            # Slime Mind command: all allied slimes perform Splash, possibly multiple times
+            times = max(1, int(act.get('times', 1)))
+            if act.get('label'):
+                self.log.add(act.get('label'))
+            alive_gi = [i for i in self.party.active if 0 <= i < len(self.party.members) and self.party.members[i].alive and self.party.members[i].hp > 0]
+            per_wave_hits = len(alive_gi)
+            for _ in range(times):
+                # Apply party damage once per wave
+                for gi in alive_gi:
+                    t = self.party.members[gi]
+                    t.hp = max(0, t.hp - 1)
+                    self.effects.trigger('party', gi, 420, 7, GREEN)
+                    self.add_floater('party', gi, '1', 700, YELLOW)
+                    if t.hp <= 0 and t.alive:
+                        t.alive = False
+                        self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                # Recoil to each slime
+                for j, en in enumerate(self.enemies):
+                    if getattr(en, 'hp', 0) > 0 and getattr(en, 'id', '') == 'slime':
+                        en.hp = max(0, en.hp - per_wave_hits)
+                        if en.hp <= 0:
+                            self.dying_enemies[j] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                            self._on_enemy_defeated(j)
+                # play sfx once per wave
+                if per_wave_hits > 0:
+                    try:
+                        if self.sfx:
+                            self.sfx.play('party_hurt', 0.7)
+                    except Exception:
+                        pass
         elif act['type'] == 'trip':
             ix = act.get('actor_index', -1)
             if 0 <= ix < len(self.enemies):
@@ -2363,6 +2472,7 @@ class Battle:
                 self.enemy_spin[ix] = {'start': pygame.time.get_ticks(), 'dur': 500}
                 if e.hp <= 0:
                     self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                    self._on_enemy_defeated(ix)
                 self.log.add(act.get('label', f"{e.name} trips!"))
         elif act['type'] == 'steal':
             ix = act.get('actor_index', -1)
@@ -6093,6 +6203,14 @@ class Game:
             for i, e in enumerate(b.enemies):
                 if getattr(e, 'hp', 0) > 0 and b.slime_pulsed.get(i):
                     self.effects.trigger('enemy', i, 120, 4, WHITE)
+                # Slime Mind low HP shake (like pulsing slime)
+                try:
+                    if getattr(e, 'hp', 0) > 0 and getattr(e, 'id', '') == 'slime_mind':
+                        mhp = max(1, int(getattr(e, 'max_hp', e.hp * 2)))
+                        if e.hp < max(1, int(0.5 * mhp)):
+                            self.effects.trigger('enemy', i, 120, 5, WHITE)
+                except Exception:
+                    pass
             # Goblin trip spin: compute rotation angle over duration
             to_remove = []
             for i, info in b.enemy_spin.items():

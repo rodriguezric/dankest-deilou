@@ -54,4 +54,13 @@
     "gold_low": 8,
     "gold_high": 22
   }
+  ,
+  {
+    "id": "slime_mind",
+    "name": "Slime Mind",
+    "archetype": "acolyte",
+    "tier": "elite",
+    "gold_low": 10,
+    "gold_high": 30
+  }
 ]
