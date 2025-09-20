@@ -1389,6 +1389,10 @@ class Battle:
         # The Censor state
         self.censor_silence_done: set = set()  # enemy indices that have performed SILENCE
         self.censor_enraged: set = set()       # enemy indices past 50% HP that now cast Spark
+        self.is_censor_battle: bool = False
+        self.censor_silence_fx: Optional[Dict[str, Any]] = None
+        self.censor_music_fade_pending: bool = False
+        self.censor_pulse_disabled: bool = False
 
     # ----- Slime Mind helpers -----
     def _spawn_slime_with_hp(self, around_index: int, hp: int):
@@ -1425,6 +1429,50 @@ class Battle:
                         self._status_set('enemy', i, 'regen', 2)
         except Exception:
             pass
+
+    # ----- The Censor helpers -----
+    def _censor_preferred_target(self) -> Tuple[Optional[int], Optional["Character"]]:
+        """Return (gi, character) of the highest-current-MP active member."""
+        best_key = None
+        best_pair: Tuple[Optional[int], Optional["Character"]] = (None, None)
+        for gi in self.party.active:
+            if not (0 <= gi < len(self.party.members)):
+                continue
+            member = self.party.members[gi]
+            if not (member.alive and member.hp > 0):
+                continue
+            cur_mp = int(getattr(member, 'mp', 0))
+            max_mp = int(getattr(member, 'max_mp', 0))
+            key = (cur_mp, max_mp, -gi)
+            if best_key is None or key > best_key:
+                best_key = key
+                best_pair = (gi, member)
+        if best_pair[0] is None:
+            alive = self.party.alive_active_members()
+            if alive:
+                member = alive[0]
+                try:
+                    return self.party.members.index(member), member
+                except ValueError:
+                    return None, None
+        return best_pair
+
+    def _party_adjacent_active(self, gi: int) -> List[int]:
+        order = [idx for idx in self.party.active if 0 <= idx < len(self.party.members)]
+        if gi not in order:
+            return []
+        pos = order.index(gi)
+        adj = []
+        if pos - 1 >= 0:
+            adj.append(order[pos - 1])
+        if pos + 1 < len(order):
+            adj.append(order[pos + 1])
+        result = []
+        for idx in adj:
+            member = self.party.members[idx]
+            if member.alive and member.hp > 0:
+                result.append(idx)
+        return result
 
     # ----- Status helpers -----
     def _status_get(self, side: str, ix: int, name: str) -> int:
@@ -1531,6 +1579,10 @@ class Battle:
         chosen = [random.choice(ids) for _ in range(count)] if ids else []
         fn = max(1, int(floor_num))
         self.enemies = [Enemy.from_base(self.monsters_by_id[cid], floor_num=fn) for cid in chosen]
+        try:
+            self.is_censor_battle = any(getattr(e, 'id', '') == 'the_censor' for e in self.enemies)
+        except Exception:
+            self.is_censor_battle = False
         # No ambush message; battle UI/intro handles the transition
         self.build_turn_order()
         self.turn_pos = 0
@@ -1732,6 +1784,10 @@ class Battle:
                         'miss_label': f"{e.name} misses {t.name}."}
         # The Censor (elite)
         if mid == 'the_censor':
+            pref_gi, pref_target = self._censor_preferred_target()
+            if pref_gi is not None and pref_target is not None:
+                gi = pref_gi
+                t = pref_target
             # One-time opening: SILENCE all party members
             if ix not in self.censor_silence_done:
                 return {'type': 'censor_silence', 'actor_side': 'enemy', 'actor_index': ix,
@@ -1753,12 +1809,19 @@ class Battle:
                         'label': f"{e.name} casts Spark for {dmg}!"}
             # Otherwise: choose regular attack or Mana Burn
             if random.random() < 0.5:
-                # Mana Burn: damage = target.max_mp - target.mp
                 target = self.party.members[gi]
-                base = max(0, int(getattr(target, 'max_mp', 0)) - int(getattr(target, 'mp', 0)))
+                missing = max(0, int(getattr(target, 'max_mp', 0)) - int(getattr(target, 'mp', 0)))
+                stacks = max(1, int(math.ceil(max(1, missing) / 3)))
+                dmg = max(1, stacks * 3)
+                splash_indices = self._party_adjacent_active(gi)
+                splash_dmg = 0
+                if dmg > 0:
+                    splash_dmg = max(1, int(math.ceil(dmg * 0.3)))
+                splash = [{'gi': idx, 'dmg': splash_dmg} for idx in splash_indices if splash_dmg > 0]
                 return {'type': 'censor_mana_burn', 'actor_side': 'enemy', 'actor_index': ix,
-                        'target_side': 'party', 'target_index': gi, 'dmg': base,
-                        'label': f"{e.name} drains your power!"}
+                        'target_side': 'party', 'target_index': gi, 'dmg': dmg,
+                        'label': f"{e.name} drains your power!", 'missing_mp': missing,
+                        'stacks': stacks, 'splash': splash}
             else:
                 hit = random.random() < 0.65
                 dmg = random.randint(e.atk_low, e.atk_high)
@@ -1964,6 +2027,9 @@ class Battle:
         # Slime 'splash' (spray) projectile travel time
         if action.get('type') == 'splash':
             self.anim['dur'] = [240, 1000, 240, 180]
+        if action.get('type') == 'censor_mana_burn':
+            # Allow longer charge-up for the mana drain
+            self.anim['dur'] = [260, 520, 260, 200]
         # Goblin chief custom timings
         if action.get('type') == 'goblin_devour':
             # Move to goblin, eat, return
@@ -2209,37 +2275,108 @@ class Battle:
         elif act['type'] == 'censor_silence':
             ai = act.get('actor_index', -1)
             self.censor_silence_done.add(ai)
+            self.censor_pulse_disabled = True
             # Remove 3 MP from all party members (clamped to 0)
             if act.get('label'):
                 self.log.add(act.get('label'))
+            total_drained = 0
             for gi, m in enumerate(self.party.members):
                 before = int(getattr(m, 'mp', 0))
-                m.mp = max(0, before - 3)
+                after = max(0, before - 3)
+                drained = max(0, before - after)
+                m.mp = after
+                if drained <= 0:
+                    continue
+                total_drained += drained
                 # MP loss floater
-                self.add_floater('party', gi, '-3', 700, BLUE)
+                self.add_floater('party', gi, f'-{drained}', 700, BLUE)
+            if total_drained > 0 and 0 <= ai < len(self.enemies):
+                enemy = self.enemies[ai]
+                if getattr(enemy, 'hp', 0) > 0:
+                    self._status_add('enemy', ai, 'regen', total_drained)
+            if getattr(self, 'is_censor_battle', False):
+                now = pygame.time.get_ticks()
+                segs = (900, 400, 700)
+                enemy_index = ai if 0 <= ai < len(self.enemies) else None
+                self.censor_silence_fx = {
+                    'start': now,
+                    'enemy_index': enemy_index,
+                    'segments': segs,
+                    'surface': None,
+                }
+                self.censor_music_fade_pending = True
         elif act['type'] == 'censor_mana_burn':
             gi = act.get('target_index', -1)
-            dmg = max(0, int(act.get('dmg', 0)))
+            base_dmg = max(0, int(act.get('dmg', 0)))
+            stacks = max(1, int(act.get('stacks', 1)))
+            splash_hits: List[Tuple[int, int]] = []
+            primary_name = None
+            primary_dmg = None
+            damage_sfx_played = False
             if 0 <= gi < len(self.party.members):
                 t = self.party.members[gi]
-                # apply defend/vulnerable like attack
+                primary_name = t.name
+                dmg = base_dmg
                 if gi in self.party_defending:
                     dmg = max(1, int(math.ceil(dmg * 0.5))) if dmg > 0 else 0
                 if self._status_get('party', gi, 'vulnerable') > 0:
                     dmg = max(1, int(math.ceil(dmg * 1.5))) if dmg > 0 else 0
                 t.hp = max(0, t.hp - dmg)
-                if dmg > 0:
+                if dmg > 0 and not damage_sfx_played:
                     try:
                         self.sfx.play('party_hurt', 0.7)
                     except Exception:
                         pass
+                    damage_sfx_played = True
                 self.add_floater('party', gi, str(dmg), 800, WHITE)
                 if t.hp <= 0:
                     t.hp = 0
                     t.alive = False
                     self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
                 self.effects.trigger('party', gi, 300, 7)
-                self.log.add(act.get('label', f"Mana Burn hits {t.name} for {dmg}."))
+                primary_dmg = dmg
+            for entry in act.get('splash', []) or []:
+                s_gi = int(entry.get('gi', -1))
+                s_base = max(0, int(entry.get('dmg', 0)))
+                if not (0 <= s_gi < len(self.party.members)):
+                    continue
+                target = self.party.members[s_gi]
+                if not (target.alive and target.hp > 0):
+                    continue
+                dmg = s_base
+                if s_gi in self.party_defending:
+                    dmg = max(1, int(math.ceil(dmg * 0.5))) if dmg > 0 else 0
+                if self._status_get('party', s_gi, 'vulnerable') > 0:
+                    dmg = max(1, int(math.ceil(dmg * 1.5))) if dmg > 0 else 0
+                target.hp = max(0, target.hp - dmg)
+                if dmg > 0 and not damage_sfx_played:
+                    try:
+                        self.sfx.play('party_hurt', 0.7)
+                    except Exception:
+                        pass
+                    damage_sfx_played = True
+                self.add_floater('party', s_gi, str(dmg), 800, WHITE)
+                if target.hp <= 0:
+                    target.hp = 0
+                    target.alive = False
+                    self.downed_party[s_gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                self.effects.trigger('party', s_gi, 300, 7)
+                splash_hits.append((s_gi, dmg))
+            label = act.get('label')
+            if primary_name:
+                dmg_value = primary_dmg if primary_dmg is not None else base_dmg
+                if label:
+                    main_msg = f"{label} {primary_name} takes {dmg_value}."
+                else:
+                    main_msg = f"Mana Burn hits {primary_name} for {dmg_value}."
+                if stacks > 1:
+                    main_msg = f"{main_msg} ({stacks} stacks)"
+                self.log.add(main_msg)
+            elif label:
+                self.log.add(label)
+            for s_idx, s_dmg in splash_hits:
+                s_name = self.party.members[s_idx].name
+                self.log.add(f"Splash scorches {s_name} for {s_dmg}.")
         elif act['type'] == 'summon':
             ai = act.get('actor_index', -1)
             if 0 <= ai < len(self.enemies):
@@ -4542,6 +4679,10 @@ class Game:
         floor_num = int(self.level_ix) + 1
         mons = [Enemy.from_base(self.monsters_by_id.get(mid, {}), floor_num=floor_num)]
         self.in_battle.enemies = mons
+        try:
+            self.in_battle.is_censor_battle = (mid == 'the_censor')
+        except Exception:
+            pass
         self.in_battle.build_turn_order(); self.in_battle.turn_pos = 0
         # Music is handled in on_mode_changed when switching to COMBAT_INTRO
         # Transition
@@ -5959,32 +6100,126 @@ class Game:
 
     def draw_battle(self):
         b = self.in_battle
+        if b and getattr(b, 'censor_music_fade_pending', False):
+            if self.music and getattr(self.music, 'enabled', False):
+                try:
+                    self.music.fade_out_all(fade_ms=1600)
+                except Exception:
+                    pass
+            b.censor_music_fade_pending = False
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Slightly brighter base to make background more visible
         view.fill((14, 14, 22))
         # Background: subtle ripple rings (like water drips)
         self.draw_battle_ripples(view)
+        censor_fx_draw: Optional[Dict[str, Any]] = None
+        had_censor_noise = False
+        if b and getattr(b, 'is_censor_battle', False):
+            fx = getattr(b, 'censor_silence_fx', None)
+            if fx:
+                now_fx = pygame.time.get_ticks()
+                grow, hold, fade = fx.get('segments', (900, 400, 700))
+                if not isinstance(grow, (int, float)) or grow <= 0:
+                    grow = 900
+                if not isinstance(hold, (int, float)) or hold < 0:
+                    hold = 400
+                if not isinstance(fade, (int, float)) or fade < 0:
+                    fade = 700
+                total = grow + hold + fade
+                dt = max(0, now_fx - fx.get('start', now_fx))
+                if dt >= total:
+                    b.censor_silence_fx = None
+                else:
+                    size_p = 1.0
+                    travel_p = 1.0
+                    bg_alpha = 0
+                    text_alpha = 255
+                    if dt <= grow:
+                        frac = dt / float(max(1, grow))
+                        ease = frac * frac
+                        size_p = frac
+                        travel_p = ease
+                        bg_alpha = int(180 * frac)
+                    elif dt <= grow + hold:
+                        size_p = 1.0
+                        travel_p = 1.0
+                        bg_alpha = 180
+                    else:
+                        after = dt - grow - hold
+                        fade_p = after / float(max(1, fade))
+                        fade_p = max(0.0, min(1.0, fade_p))
+                        size_p = 1.0
+                        travel_p = 1.0
+                        bg_alpha = int(180 * (1.0 - fade_p))
+                        text_alpha = int(255 * (1.0 - fade_p))
+                    bg_alpha = max(0, min(200, bg_alpha))
+                    text_alpha = max(0, min(255, text_alpha))
+                    if fx.get('surface') is None:
+                        try:
+                            big_font = self.r._load_font(240)
+                        except Exception:
+                            big_font = self.r.font_big
+                        surf = big_font.render('SILENCE', True, WHITE)
+                        fx['surface'] = surf.convert_alpha()
+                    censor_fx_draw = {
+                        'bg_alpha': bg_alpha,
+                        'text_alpha': text_alpha,
+                        'size_p': max(0.0, min(1.0, size_p)),
+                        'travel_p': max(0.0, min(1.0, travel_p)),
+                        'enemy_index': fx.get('enemy_index'),
+                        'surface': fx.get('surface'),
+                    }
+                    had_censor_noise = True
+        pulse_active = True
+        pulse_fade = 1.0
+        noise_boost = 1.0
+        if censor_fx_draw:
+            damp = max(0.0, min(1.0, 1.0 - censor_fx_draw.get('bg_alpha', 0) / 200.0))
+            pulse_active = damp > 0.0
+            pulse_fade = damp
+            noise_boost = 1.0 + (1.0 - damp) * 1.6
+        if b and getattr(b, 'is_censor_battle', False) and getattr(b, 'censor_pulse_disabled', False):
+            pulse_active = False
+            pulse_fade = 0.0
+            noise_boost = 2.6
         # Elite battle visual treatment: slow red pulse + light noise
         if b and getattr(b, 'is_elite', False):
             now_ms = pygame.time.get_ticks()
             # Red pulse overlay
-            pulse = 0.5 + 0.5 * math.sin(now_ms / 900.0)
-            alpha = int(40 + 50 * pulse)
-            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
-            overlay.fill((140, 20, 20, max(0, min(255, alpha))))
-            view.blit(overlay, (0, 0))
-            # Sparse noise (refresh every ~120ms)
-            noise = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
-            noise_alpha = 24
-            seed = int(now_ms // 120)
-            rng = random.Random(seed)
-            for _ in range(140):
-                x = rng.randint(0, WIDTH - 1)
-                y = rng.randint(0, VIEW_H - 1)
-                sz = rng.randint(1, 2)
-                c = (rng.randint(120, 180), rng.randint(10, 30), rng.randint(10, 30), noise_alpha)
-                pygame.draw.rect(noise, c, pygame.Rect(x, y, sz, sz))
-            view.blit(noise, (0, 0))
+            if pulse_active:
+                pulse = 0.5 + 0.5 * math.sin(now_ms / 900.0)
+            else:
+                pulse = 0.0
+            alpha = int((40 + 50 * pulse) * pulse_fade)
+            if pulse_active and alpha > 0:
+                overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                r = int(140 * pulse_fade + 60 * (1.0 - pulse_fade))
+                g = int(20 * pulse_fade + 60 * (1.0 - pulse_fade))
+                bcol = int(20 * pulse_fade + 70 * (1.0 - pulse_fade))
+                overlay.fill((r, g, bcol, max(0, min(255, alpha))))
+                view.blit(overlay, (0, 0))
+            if had_censor_noise:
+                base_noise_alpha = 40 if not pulse_active else 24
+                noise_alpha = int(base_noise_alpha * max(0.2, pulse_fade) * noise_boost)
+                count = int(220 * noise_boost)
+                if noise_alpha > 0 and count > 0:
+                    noise = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                    seed = int(now_ms // 120)
+                    rng = random.Random(seed)
+                    for _ in range(count):
+                        x = rng.randint(0, WIDTH - 1)
+                        y = rng.randint(0, VIEW_H - 1)
+                        sz = rng.randint(1, 3)
+                        if not pulse_active:
+                            base = rng.randint(40, 90)
+                            tint = base
+                            col = (tint, tint, min(150, tint + 6), noise_alpha)
+                        else:
+                            base = rng.randint(120, 180)
+                            tint = int(base * max(0.3, pulse_fade) + 120 * (1.0 - pulse_fade))
+                            col = (tint, tint, min(210, tint + 20), noise_alpha)
+                        pygame.draw.rect(noise, col, pygame.Rect(x, y, sz, sz))
+                    view.blit(noise, (0, 0))
         party_highlight = set()
         party_acting = set()
         enemy_highlight = set()
@@ -6328,23 +6563,35 @@ class Game:
         # Spell projectile (Spark): rotating triangle from caster to target during pre stage
         if b and b.state == 'anim' and b.anim:
             act = b.anim['action']
-            if act.get('type') == 'spell' and act.get('actor_side') == 'party':
+            if act.get('type') == 'spell':
                 stage = b.anim.get('stage', 0)
                 durs = b.anim.get('dur', [0, 0, 0, 0])
                 if len(durs) >= 4 and stage == 1:
-                    now = pygame.time.get_ticks()
-                    t0 = b.anim.get('t0', now)
-                    dur = durs[stage] if stage < len(durs) else 1
-                    p = 0.0
-                    if dur > 0:
-                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    actor_side = act.get('actor_side')
                     ai = act.get('actor_index')
                     ti = act.get('target_index')
-                    src_rect = party_rects.get(ai)
-                    dst_rect = enemy_rects.get(ti)
-                    if src_rect and dst_rect:
-                        sx, sy = src_rect.centerx, src_rect.top
-                        ex, ey = dst_rect.centerx, dst_rect.centery
+                    src_pos = dst_pos = None
+                    if actor_side == 'party':
+                        src_rect = party_rects.get(ai)
+                        dst_rect = enemy_rects.get(ti)
+                        if src_rect and dst_rect:
+                            src_pos = (src_rect.centerx, src_rect.top)
+                            dst_pos = (dst_rect.centerx, dst_rect.centery)
+                    elif actor_side == 'enemy':
+                        src_rect = enemy_rects.get(ai)
+                        dst_rect = party_rects.get(ti)
+                        if src_rect and dst_rect:
+                            src_pos = (src_rect.centerx, src_rect.bottom)
+                            dst_pos = (dst_rect.centerx, dst_rect.top)
+                    if src_pos and dst_pos:
+                        now = pygame.time.get_ticks()
+                        t0 = b.anim.get('t0', now)
+                        dur = durs[stage] if stage < len(durs) else 1
+                        p = 0.0
+                        if dur > 0:
+                            p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                        sx, sy = src_pos
+                        ex, ey = dst_pos
                         # Strong ease-in so it starts very slow and accelerates toward target
                         pe = p * p * p
                         cx = sx + (ex - sx) * pe
@@ -6370,7 +6617,6 @@ class Game:
                             alpha = max(20, 120 - k * 18)
                             pygame.draw.polygon(trail, (240, 220, 80, alpha), [tip_k, left_k, right_k])
                         view.blit(trail, (0, 0))
-                        # Main triangle: outline only (no fill)
                         tip = (cx + math.cos(theta) * base_size, cy + math.sin(theta) * base_size)
                         left = (cx + math.cos(theta + 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta + 2.0 * math.pi / 3.0) * base_size)
                         right = (cx + math.cos(theta - 2.0 * math.pi / 3.0) * base_size, cy + math.sin(theta - 2.0 * math.pi / 3.0) * base_size)
@@ -6456,6 +6702,42 @@ class Game:
                         rot = pygame.transform.rotate(temp, ang)
                         rrect = rot.get_rect(center=(int(cx), int(cy)))
                         view.blit(rot, rrect.topleft)
+            elif act.get('type') == 'censor_mana_burn' and act.get('actor_side') == 'enemy':
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 2:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = 0.0
+                    if dur > 0:
+                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+
+                    def draw_triangle_burst(rect: Optional[pygame.Rect], scale: float = 1.0, color: Tuple[int, int, int] = PURPLE):
+                        if not rect:
+                            return
+                        cx, cy = rect.centerx, rect.centery
+                        base_radius = rect.width * 0.3 * scale
+                        tip_radius = base_radius * (1.2 + 1.6 * p)
+                        tri_angle = 0.45
+                        count = max(6, int(14 * scale))
+                        for i in range(count):
+                            ang = (2 * math.pi * i / count) + (p * math.pi)
+                            tip = (cx + math.cos(ang) * tip_radius, cy + math.sin(ang) * tip_radius)
+                            left = (cx + math.cos(ang - tri_angle) * base_radius, cy + math.sin(ang - tri_angle) * base_radius)
+                            right = (cx + math.cos(ang + tri_angle) * base_radius, cy + math.sin(ang + tri_angle) * base_radius)
+                            pygame.draw.polygon(view, color, [tip, left, right])
+
+                    # Primary target burst (full size)
+                    gi = act.get('target_index')
+                    primary_rect = party_rects.get(gi)
+                    draw_triangle_burst(primary_rect, 1.0, (190, 120, 255))
+
+                    splash_list = act.get('splash', []) or []
+                    for entry in splash_list:
+                        s_gi = int(entry.get('gi', -1))
+                        splash_rect = party_rects.get(s_gi)
+                        draw_triangle_burst(splash_rect, 0.5, (160, 110, 230))
             # Backstab fade effect: fade out then fade in near target during pre stage
             if act.get('type') == 'backstab' and act.get('actor_side') == 'party':
                 stage = b.anim.get('stage', 0)
@@ -6569,6 +6851,38 @@ class Game:
                 alpha = max(0, 255 - int(255 * (t / 500.0)))
                 overlay.fill((0, 0, 0, alpha))
             view.blit(overlay, (0, 0))
+
+        if censor_fx_draw:
+            bg_alpha = censor_fx_draw.get('bg_alpha', 0)
+            if bg_alpha > 0:
+                gray = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                gray.fill((60, 60, 60, bg_alpha))
+                view.blit(gray, (0, 0))
+            surf = censor_fx_draw.get('surface')
+            if surf is not None:
+                enemy_index = censor_fx_draw.get('enemy_index')
+                src_rect = enemy_rects.get(enemy_index) if (enemy_index is not None) else None
+                if src_rect:
+                    start_c = (src_rect.centerx, src_rect.centery)
+                else:
+                    start_c = (WIDTH // 2, 60)
+                end_c = (WIDTH // 2, VIEW_H // 2)
+                travel_p = max(0.0, min(1.0, censor_fx_draw.get('travel_p', 1.0)))
+                cx = int(start_c[0] + (end_c[0] - start_c[0]) * travel_p)
+                cy = int(start_c[1] + (end_c[1] - start_c[1]) * travel_p)
+                base_w = max(1, surf.get_width())
+                base_h = max(1, surf.get_height())
+                start_w = 140
+                end_w = int(WIDTH * 1.05)
+                size_p = max(0.0, min(1.0, censor_fx_draw.get('size_p', 1.0)))
+                cur_w = max(1, int(start_w + (end_w - start_w) * size_p))
+                scale = cur_w / float(base_w)
+                cur_h = max(1, int(base_h * scale))
+                scaled = pygame.transform.smoothscale(surf, (cur_w, cur_h)) if cur_w != base_w else surf
+                if scaled is surf:
+                    scaled = surf.copy()
+                scaled.set_alpha(censor_fx_draw.get('text_alpha', 255))
+                view.blit(scaled, (cx - cur_w // 2, cy - cur_h // 2))
 
         # Draw floaters (damage, heal, MISS) above windows, on top of overlays
         if b:
