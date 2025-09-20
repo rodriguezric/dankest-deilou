@@ -1386,6 +1386,9 @@ class Battle:
         self.enemy_spin: Dict[int, Dict[str, int]] = {}
         # Slime Mind (elite) support
         self._slime_mind_ids = set(['slime_mind'])
+        # The Censor state
+        self.censor_silence_done: set = set()  # enemy indices that have performed SILENCE
+        self.censor_enraged: set = set()       # enemy indices past 50% HP that now cast Spark
 
     # ----- Slime Mind helpers -----
     def _spawn_slime_with_hp(self, around_index: int, hp: int):
@@ -1726,6 +1729,42 @@ class Battle:
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
                         'hit': hit, 'dmg': dmg, 'label': f"{e.name} lashes out at {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
+        # The Censor (elite)
+        if mid == 'the_censor':
+            # One-time opening: SILENCE all party members
+            if ix not in self.censor_silence_done:
+                return {'type': 'censor_silence', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': 'The Censor bellows: SILENCE!'}
+            # If crossing below half HP, declare ENOUGH once, then switch to Spark
+            try:
+                maxhp = max(1, int(getattr(e, 'max_hp', e.hp * 2)))
+                if e.hp < max(1, int(0.5 * maxhp)) and ix not in self.censor_enraged:
+                    self.censor_enraged.add(ix)
+                    return {'type': 'emote', 'actor_side': 'enemy', 'actor_index': ix, 'label': 'ENOUGH.'}
+            except Exception:
+                pass
+            # If enraged: cast Spark every turn
+            if ix in self.censor_enraged:
+                dmg = max(1, random.randint(4, 8))
+                return {'type': 'spell', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': True, 'dmg': dmg,
+                        'label': f"{e.name} casts Spark for {dmg}!"}
+            # Otherwise: choose regular attack or Mana Burn
+            if random.random() < 0.5:
+                # Mana Burn: damage = target.max_mp - target.mp
+                target = self.party.members[gi]
+                base = max(0, int(getattr(target, 'max_mp', 0)) - int(getattr(target, 'mp', 0)))
+                return {'type': 'censor_mana_burn', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi, 'dmg': base,
+                        'label': f"{e.name} drains your power!"}
+            else:
+                hit = random.random() < 0.65
+                dmg = random.randint(e.atk_low, e.atk_high)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} strikes {t.name}",
                         'miss_label': f"{e.name} misses {t.name}."}
         # Goblin
         if mid == 'goblin':
@@ -2090,6 +2129,15 @@ class Battle:
                 if self._status_get(a_side, a_ix, 'blind') > 0:
                     act['hit'] = False
                     self._status_dec(a_side, a_ix, 'blind', 1)
+            # The Censor: immune to targeted magic -> miss + gains regen
+            if act.get('type') == 'spell' and act.get('target_side') == 'enemy':
+                i = act.get('target_index', -1)
+                if 0 <= i < len(self.enemies):
+                    tgt = self.enemies[i]
+                    if getattr(tgt, 'id', '') == 'the_censor':
+                        act['hit'] = False
+                        self._status_add('enemy', i, 'regen', 3)
+                        self.log.add(f"{tgt.name} smiles and absorbs the magic.")
             if act.get('hit', False):
                 dmg = max(1, int(act.get('dmg', 1)))
                 # Weak reduces outgoing damage; Vulnerable increases incoming damage
@@ -2158,6 +2206,40 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(act.get('miss_label', 'The attack misses.'))
+        elif act['type'] == 'censor_silence':
+            ai = act.get('actor_index', -1)
+            self.censor_silence_done.add(ai)
+            # Remove 3 MP from all party members (clamped to 0)
+            if act.get('label'):
+                self.log.add(act.get('label'))
+            for gi, m in enumerate(self.party.members):
+                before = int(getattr(m, 'mp', 0))
+                m.mp = max(0, before - 3)
+                # MP loss floater
+                self.add_floater('party', gi, '-3', 700, BLUE)
+        elif act['type'] == 'censor_mana_burn':
+            gi = act.get('target_index', -1)
+            dmg = max(0, int(act.get('dmg', 0)))
+            if 0 <= gi < len(self.party.members):
+                t = self.party.members[gi]
+                # apply defend/vulnerable like attack
+                if gi in self.party_defending:
+                    dmg = max(1, int(math.ceil(dmg * 0.5))) if dmg > 0 else 0
+                if self._status_get('party', gi, 'vulnerable') > 0:
+                    dmg = max(1, int(math.ceil(dmg * 1.5))) if dmg > 0 else 0
+                t.hp = max(0, t.hp - dmg)
+                if dmg > 0:
+                    try:
+                        self.sfx.play('party_hurt', 0.7)
+                    except Exception:
+                        pass
+                self.add_floater('party', gi, str(dmg), 800, WHITE)
+                if t.hp <= 0:
+                    t.hp = 0
+                    t.alive = False
+                    self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                self.effects.trigger('party', gi, 300, 7)
+                self.log.add(act.get('label', f"Mana Burn hits {t.name} for {dmg}."))
         elif act['type'] == 'summon':
             ai = act.get('actor_index', -1)
             if 0 <= ai < len(self.enemies):

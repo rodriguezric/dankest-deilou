@@ -63,4 +63,13 @@
     "gold_low": 10,
     "gold_high": 30
   }
+  ,
+  {
+    "id": "the_censor",
+    "name": "The Censor",
+    "archetype": "adept",
+    "tier": "elite",
+    "gold_low": 12,
+    "gold_high": 36
+  }
 ]
