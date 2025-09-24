@@ -104,6 +104,17 @@ AC_BASE = 10
 SHOP_ITEMS: List[Dict[str, Any]] = []
 ITEMS_BY_ID: Dict[str, Dict[str, Any]] = {}
 
+BONUS_KEY_MAP = {
+    'str': 'STR',
+    'iq': 'IQ',
+    'pie': 'PIE',
+    'piety': 'PIE',
+    'vit': 'VIT',
+    'agi': 'AGI',
+    'hp': 'HP',
+    'mp': 'MP',
+}
+
 # Recruiting costs per class (party pays on creation)
 CLASS_COSTS = {"Rogue": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
 
@@ -331,6 +342,7 @@ class Character:
     equipment: Equipment = field(default_factory=Equipment)
     inventory: List[str] = field(default_factory=list)
     statuses: Dict[str, int] = field(default_factory=dict)
+    gear_bonus: Dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self):
         base_hp = BASE_HP[self.cls]
@@ -341,7 +353,11 @@ class Character:
 
     @property
     def atk_bonus(self) -> int:
-        return ability_mod(self.str_) + self.equipment.weapon_atk
+        bonus = ability_mod(self.str_) + self.equipment.weapon_atk
+        for iid in (self.equipment.armor_id, self.equipment.acc1_id, self.equipment.acc2_id):
+            if iid:
+                bonus += int(ITEMS_BY_ID.get(iid, {}).get('atk', 0))
+        return bonus
 
     @property
     def defense_ac(self) -> int:
@@ -354,12 +370,7 @@ class Character:
 
     @property
     def agi_effective(self) -> int:
-        # Base AGI plus accessory bonuses
-        bonus = 0
-        for iid in (self.equipment.acc1_id, self.equipment.acc2_id):
-            if iid:
-                bonus += ITEMS_BY_ID.get(iid, {}).get('agi', 0)
-        return self.agi + bonus
+        return self.agi
 
     def to_dict(self):
         d = asdict(self)
@@ -2894,6 +2905,7 @@ class Game:
         # New games start with party-level gold and no items
         self.party.gold = 100
         self.party.inventory = []
+        self.refresh_party_gear_bonuses()
         self.mode = MODE_TITLE
         self.return_mode = MODE_TOWN
 
@@ -3336,6 +3348,7 @@ class Game:
         with open(path) as f:
             data = json.load(f)
         self.party = Party.from_dict(data.get("party", {}))
+        self.refresh_party_gear_bonuses()
         self.level_ix = int(data.get("level", 0))
         self.dun.ensure_level(self.level_ix)
         # Restore fog-of-war and chests state
@@ -3478,6 +3491,7 @@ class Game:
                 if self.title_index == 0:  # New Game
                     # reset party and resources
                     self.party = Party()
+                    self.refresh_party_gear_bonuses()
                     self.party.gold = 100
                     self.party.inventory = []
                     self.mode = MODE_TOWN
@@ -3956,12 +3970,13 @@ class Game:
     # --------------- Trait Selection ---------------
     def start_trait_selection(self, member_ix: int, return_mode: str = MODE_PARTY):
         now = pygame.time.get_ticks()
+        trait_options = ['Quick', 'Strong', 'Insightful', 'Devout', 'Stalwart', 'Focused', 'Tough']
         self.trait_state = {
             'member_ix': member_ix,
-            'traits': ['Quick', 'Strong', 'Focused', 'Tough'],
+            'traits': trait_options,
             'return_mode': return_mode,
-            'left_idx': random.randint(0, 3),
-            'right_idx': random.randint(0, 3),
+            'left_idx': random.randint(0, len(trait_options) - 1),
+            'right_idx': random.randint(0, len(trait_options) - 1),
             'left_steps': random.randint(22, 34),
             'right_steps': random.randint(26, 40),
             'left_delay': 40,
@@ -4097,6 +4112,15 @@ class Game:
         elif trait == 'Strong':
             m.str_ += 1 * mult
             self.log.add(f"{m.name} gains Strong (+{1*mult} STR).")
+        elif trait == 'Insightful':
+            m.iq += 1 * mult
+            self.log.add(f"{m.name} gains Insightful (+{1*mult} IQ).")
+        elif trait == 'Devout':
+            m.piety += 1 * mult
+            self.log.add(f"{m.name} gains Devout (+{1*mult} PIE).")
+        elif trait == 'Stalwart':
+            m.vit += 1 * mult
+            self.log.add(f"{m.name} gains Stalwart (+{1*mult} VIT).")
         elif trait == 'Focused':
             m.max_mp += 2 * mult
             m.mp += 2 * mult
@@ -5753,8 +5777,129 @@ class Game:
         iid = m.equipment.acc1_id if ix == 2 else m.equipment.acc2_id
         if iid:
             it = ITEMS_BY_ID.get(iid, {"name": iid})
-            return it.get('name', iid)
+            buffs = []
+            if 'agi' in it:
+                buffs.append(f"AGI+{it['agi']}")
+            if 'ac' in it:
+                buffs.append(f"AC{it['ac']:+}")
+            if 'atk' in it:
+                buffs.append(f"ATK+{it['atk']}")
+            suffix = f" ({', '.join(buffs)})" if buffs else ""
+            return it.get('name', iid) + suffix
         return "(empty)"
+
+    def _item_requirement_status(self, m: Optional[Character], item: Dict[str, Any]) -> Tuple[bool, List[Tuple[str, str, bool, str]]]:
+        reqs = item.get('req')
+        if not isinstance(reqs, dict) or not reqs:
+            return True, []
+        parts: List[Tuple[str, str, bool, str]] = []
+        meets = True
+        # Class requirement
+        cls_req = reqs.get('class')
+        if cls_req:
+            if isinstance(cls_req, (list, tuple, set)):
+                allowed = list(cls_req)
+            else:
+                allowed = [str(cls_req)]
+            current_cls = getattr(m, 'cls', '?') if m else '?'
+            ok = m is not None and current_cls in allowed
+            if not ok:
+                meets = False
+            parts.append(('Class', '/'.join(allowed), ok, current_cls))
+        # Level requirement
+        if 'level' in reqs:
+            needed_level = int(reqs.get('level', 0))
+            current_level = getattr(m, 'level', 0) if m else 0
+            ok = current_level >= needed_level
+            if not ok:
+                meets = False
+            parts.append(('Level', str(needed_level), ok, str(current_level)))
+        return meets, parts
+
+    def _format_requirement_label(self, parts: List[Tuple[str, str, bool, str]]) -> str:
+        if not parts:
+            return ""
+        labels = []
+        for label, needed, ok, _actual in parts:
+            if label == 'Class':
+                labels.append(f"{needed}{'' if ok else '✗'}")
+            elif label == 'Level':
+                labels.append(f"Lv {needed}{'' if ok else '✗'}")
+        return "Req " + " ".join(labels)
+
+    def _character_can_equip(self, m: Character, item: Dict[str, Any]) -> Tuple[bool, List[Tuple[str, str, bool, str]]]:
+        ok, parts = self._item_requirement_status(m, item)
+        return ok, parts
+
+    def _collect_item_bonuses(self, m: Character) -> Dict[str, int]:
+        total: Dict[str, int] = {}
+        for iid in filter(None, [m.equipment.weapon_id, m.equipment.armor_id, m.equipment.acc1_id, m.equipment.acc2_id]):
+            it = ITEMS_BY_ID.get(iid, {})
+            for key, value in it.items():
+                norm = BONUS_KEY_MAP.get(str(key).lower())
+                if not norm:
+                    continue
+                try:
+                    val_int = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if val_int == 0:
+                    continue
+                total[norm] = total.get(norm, 0) + val_int
+        return total
+
+    def _apply_single_bonus(self, m: Character, key: str, delta: int):
+        if delta == 0:
+            return
+        if key == 'STR':
+            m.str_ += delta
+        elif key == 'IQ':
+            m.iq += delta
+        elif key == 'PIE':
+            m.piety += delta
+        elif key == 'VIT':
+            m.vit += delta
+        elif key == 'AGI':
+            m.agi += delta
+        elif key == 'HP':
+            old_max = m.max_hp
+            m.max_hp = max(1, m.max_hp + delta)
+            if delta > 0:
+                m.hp = min(m.max_hp, m.hp + delta)
+            else:
+                m.hp = min(m.hp, m.max_hp)
+                if m.hp <= 0:
+                    m.hp = 1
+            # ensure hp not below 1 when alive
+            if m.alive and m.hp <= 0:
+                m.hp = 1
+        elif key == 'MP':
+            m.max_mp = max(0, m.max_mp + delta)
+            if delta > 0:
+                m.mp = min(m.max_mp, m.mp + delta)
+            else:
+                m.mp = min(m.mp, m.max_mp)
+                if m.mp < 0:
+                    m.mp = 0
+
+    def _apply_gear_bonuses(self, m: Character):
+        prev = getattr(m, 'gear_bonus', {}) or {}
+        if prev:
+            for key, value in prev.items():
+                self._apply_single_bonus(m, key, -value)
+        new_bonus = self._collect_item_bonuses(m)
+        for key, value in new_bonus.items():
+            self._apply_single_bonus(m, key, value)
+        m.gear_bonus = new_bonus
+
+    def refresh_party_gear_bonuses(self):
+        if not getattr(self, 'party', None):
+            return
+        for m in getattr(self.party, 'members', []):
+            try:
+                self._apply_gear_bonuses(m)
+            except Exception:
+                pass
 
     def draw_equip(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -5788,7 +5933,25 @@ class Game:
                 pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'armor']
             else:
                 pool = [iid for iid in self.party.inventory if ITEMS_BY_ID.get(iid,{}).get('type') == 'accessory']
-            options = [ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid) for iid in pool]
+            options = []
+            for iid in pool:
+                it = ITEMS_BY_ID.get(iid, {"name": iid})
+                label = it.get('name', iid)
+                _, parts = self._character_can_equip(m, it)
+                req_label = self._format_requirement_label(parts)
+                if req_label:
+                    label = f"{label} [{req_label}]"
+                unmet = []
+                for lbl, need, ok, _val in parts:
+                    if ok:
+                        continue
+                    if lbl == 'Class':
+                        unmet.append(need)
+                    elif lbl == 'Level':
+                        unmet.append(f"Lv {need}")
+                if unmet:
+                    label = f"{label} (need {', '.join(unmet)})"
+                options.append(label)
             # Allow unequip when something is equipped
             can_unequip = (
                 (slot_ix == 0 and m.equipment.weapon_id) or
@@ -5821,6 +5984,10 @@ class Game:
             if m.equipment.acc2_id:
                 self.party.inventory.append(m.equipment.acc2_id)
             m.equipment.acc2_id = iid
+        try:
+            self._apply_gear_bonuses(m)
+        except Exception:
+            pass
 
     def equip_input(self, event):
         if event.type != pygame.KEYDOWN:
@@ -5895,6 +6062,27 @@ class Game:
                 pick_ix = self.equip_choose_ix - (1 if can_unequip else 0)
                 if 0 <= pick_ix < len(pool):
                     iid = pool[pick_ix]
+                    item = ITEMS_BY_ID.get(iid, {"name": iid})
+                    ok, parts = self._character_can_equip(m, item)
+                    if not ok:
+                        unmet = []
+                        for lbl, need, meet, _val in parts:
+                            if meet:
+                                continue
+                            if lbl == 'Class':
+                                unmet.append(need)
+                            elif lbl == 'Level':
+                                unmet.append(f"Lv {need}")
+                        if unmet:
+                            msg = f"{m.name} needs {', '.join(unmet)} for {item.get('name', iid)}."
+                            self.log.add(msg)
+                        else:
+                            self.log.add(f"{m.name} cannot equip {item.get('name', iid)}.")
+                        try:
+                            self.sfx.play('miss', 0.6)
+                        except Exception:
+                            pass
+                        return
                     # remove from inventory and equip
                     # remove first occurrence
                     try:
@@ -6113,26 +6301,45 @@ class Game:
         view.fill((14, 14, 22))
         # Determine if special silence background should override regular effects
         censor_fx_draw: Optional[Dict[str, Any]] = None
-        censor_plain_bg = False
         if b and getattr(b, 'is_censor_battle', False) and getattr(b, 'censor_pulse_disabled', False):
-            # Silence cast: plain dark background with slow gray pulses
-            view.fill((30, 30, 34))
+            # Silence cast: psychedelic melting rings on plain dark background
+            view.fill((24, 24, 32))
             now = pygame.time.get_ticks()
-            base_centers = [(WIDTH // 2, VIEW_H // 3), (WIDTH // 2, VIEW_H * 2 // 3), (WIDTH // 2, VIEW_H // 2)]
-            radii = [110, 170, 230]
-            for idx, (cx, cy) in enumerate(base_centers):
-                rad = radii[idx % len(radii)]
-                puls = 0.15 + 0.1 * math.sin((now / 1800.0) + idx)
-                current_r = int(rad * (0.85 + puls))
-                alpha = int(40 + 40 * abs(math.sin(now / 2000.0 + idx * 0.7)))
-                overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
-                pygame.draw.circle(overlay, (90, 90, 100, alpha), (cx, cy), max(10, current_r), 4)
-                view.blit(overlay, (0, 0))
-            censor_plain_bg = True
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            centers = [
+                (WIDTH // 2, VIEW_H // 2),
+                (WIDTH // 3, VIEW_H // 3),
+                (WIDTH * 2 // 3, VIEW_H * 2 // 3),
+                (WIDTH // 4, VIEW_H * 3 // 5),
+                (WIDTH * 3 // 4, VIEW_H // 4),
+            ]
+            for idx in range(12):
+                cx, cy = centers[idx % len(centers)]
+                cx += int(16 * math.sin(now / 1400.0 + idx * 0.8))
+                cy += int(22 * math.sin(now / 1600.0 + idx * 1.3))
+                base_r = 60 + 40 * (idx % 4)
+                puls = 0.6 + 0.4 * math.sin((now / 900.0) + idx * 0.9)
+                melt = 0.5 + 0.5 * math.sin((now / 700.0) + idx * 1.7)
+                radius_x = int(base_r * (1.0 + puls * 0.6))
+                radius_y = int(base_r * (0.6 + melt * 0.5))
+                color_shift = 50 + int(30 * math.sin(now / 1100.0 + idx))
+                col = (90 + color_shift, 90 + color_shift, 120 + color_shift // 2, 70 + int(40 * puls))
+                rect = pygame.Rect(0, 0, max(12, radius_x * 2), max(12, radius_y * 2))
+                rect.center = (cx, cy)
+                pygame.draw.ellipse(overlay, col, rect, 4)
+            for smear in range(6):
+                smear_overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                smear_alpha = max(10, 40 - smear * 6)
+                smear_color = (120, 120, 140, smear_alpha)
+                stretch = 1.1 + smear * 0.04
+                melt_rect = pygame.Rect(0, 0, int(WIDTH * stretch), int(VIEW_H * 0.35))
+                melt_rect.center = (WIDTH // 2, int(VIEW_H * (0.3 + smear * 0.1)))
+                pygame.draw.ellipse(smear_overlay, smear_color, melt_rect, 2)
+                overlay.blit(smear_overlay, (0, 0), special_flags=pygame.BLEND_ADD)
+            view.blit(overlay, (0, 0))
         else:
             # Background: subtle ripple rings (like water drips)
             self.draw_battle_ripples(view)
-        censor_fx_draw: Optional[Dict[str, Any]] = None
         had_censor_noise = False
         if b and getattr(b, 'is_censor_battle', False):
             fx = getattr(b, 'censor_silence_fx', None)
