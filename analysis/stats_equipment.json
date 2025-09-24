@@ -1,0 +1,813 @@
+{
+  "target_level": 10,
+  "samples": 20000,
+  "classes": {
+    "Fighter": {
+      "distributions": [
+        {
+          "stats": {
+            "STR": 7,
+            "IQ": 1,
+            "PIE": 3,
+            "VIT": 7,
+            "AGI": 3
+          },
+          "probability_pct": 3.25,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "great_axe",
+              "titan_maul",
+              "crusher_pick",
+              "earthshaker_maul",
+              "wyrmcleaver"
+            ],
+            "armor": [
+              "leather_armor",
+              "steel_carapace",
+              "colossus_plate",
+              "stonewall_armor",
+              "earthshell_plate",
+              "legion_bastion"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 6,
+            "IQ": 1,
+            "PIE": 3,
+            "VIT": 7,
+            "AGI": 4
+          },
+          "probability_pct": 3.06,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "great_axe",
+              "titan_maul",
+              "crusher_pick",
+              "earthshaker_maul",
+              "wyrmcleaver"
+            ],
+            "armor": [
+              "leather_armor",
+              "steel_carapace",
+              "colossus_plate",
+              "stonewall_armor",
+              "earthshell_plate",
+              "legion_bastion"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 6,
+            "IQ": 1,
+            "PIE": 3,
+            "VIT": 8,
+            "AGI": 3
+          },
+          "probability_pct": 2.6,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "great_axe",
+              "titan_maul",
+              "crusher_pick",
+              "earthshaker_maul",
+              "wyrmcleaver"
+            ],
+            "armor": [
+              "leather_armor",
+              "steel_carapace",
+              "colossus_plate",
+              "stonewall_armor",
+              "earthshell_plate",
+              "legion_bastion"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 6,
+            "IQ": 1,
+            "PIE": 3,
+            "VIT": 7,
+            "AGI": 3
+          },
+          "probability_pct": 2.42,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "great_axe",
+              "titan_maul",
+              "crusher_pick",
+              "earthshaker_maul",
+              "wyrmcleaver"
+            ],
+            "armor": [
+              "leather_armor",
+              "steel_carapace",
+              "colossus_plate",
+              "stonewall_armor",
+              "earthshell_plate",
+              "legion_bastion"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 6,
+            "IQ": 2,
+            "PIE": 3,
+            "VIT": 7,
+            "AGI": 3
+          },
+          "probability_pct": 2.14,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "great_axe",
+              "titan_maul",
+              "crusher_pick",
+              "earthshaker_maul",
+              "wyrmcleaver"
+            ],
+            "armor": [
+              "leather_armor",
+              "steel_carapace",
+              "colossus_plate",
+              "stonewall_armor",
+              "earthshell_plate",
+              "legion_bastion"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": "other",
+          "probability_pct": 86.53
+        }
+      ]
+    },
+    "Rogue": {
+      "distributions": [
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 4,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 7
+          },
+          "probability_pct": 2.6,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "wind_blades",
+              "storm_knives",
+              "shadow_rippers"
+            ],
+            "armor": [
+              "leather_armor",
+              "shadow_jacket",
+              "phantom_wrap",
+              "nightveil_cloak"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 4,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 6
+          },
+          "probability_pct": 2.55,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "wind_blades",
+              "storm_knives",
+              "shadow_rippers"
+            ],
+            "armor": [
+              "leather_armor",
+              "shadow_jacket",
+              "phantom_wrap",
+              "nightveil_cloak"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 4,
+            "PIE": 3,
+            "VIT": 4,
+            "AGI": 6
+          },
+          "probability_pct": 2.42,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "wind_blades",
+              "storm_knives",
+              "shadow_rippers"
+            ],
+            "armor": [
+              "leather_armor",
+              "shadow_jacket",
+              "phantom_wrap",
+              "nightveil_cloak"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 5,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 6
+          },
+          "probability_pct": 2.23,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "wind_blades",
+              "storm_knives",
+              "shadow_rippers"
+            ],
+            "armor": [
+              "leather_armor",
+              "shadow_jacket",
+              "phantom_wrap",
+              "nightveil_cloak"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 2,
+            "IQ": 4,
+            "PIE": 3,
+            "VIT": 4,
+            "AGI": 7
+          },
+          "probability_pct": 2.06,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "wind_blades",
+              "storm_knives",
+              "shadow_rippers"
+            ],
+            "armor": [
+              "leather_armor",
+              "shadow_jacket",
+              "phantom_wrap",
+              "nightveil_cloak"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": "other",
+          "probability_pct": 88.14
+        }
+      ]
+    },
+    "Priest": {
+      "distributions": [
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 3,
+            "PIE": 7,
+            "VIT": 5,
+            "AGI": 1
+          },
+          "probability_pct": 6.82,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "blessed_mace",
+              "sun_flail",
+              "seraph_staff"
+            ],
+            "armor": [
+              "leather_armor",
+              "sanctified_mail",
+              "dawnplate",
+              "aurora_raiment"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 3,
+            "PIE": 6,
+            "VIT": 5,
+            "AGI": 1
+          },
+          "probability_pct": 6.76,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "blessed_mace",
+              "sun_flail",
+              "seraph_staff"
+            ],
+            "armor": [
+              "leather_armor",
+              "sanctified_mail",
+              "dawnplate",
+              "aurora_raiment"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 4,
+            "PIE": 6,
+            "VIT": 5,
+            "AGI": 1
+          },
+          "probability_pct": 6.39,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "blessed_mace",
+              "sun_flail",
+              "seraph_staff"
+            ],
+            "armor": [
+              "leather_armor",
+              "sanctified_mail",
+              "dawnplate",
+              "aurora_raiment"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 4,
+            "PIE": 7,
+            "VIT": 5,
+            "AGI": 1
+          },
+          "probability_pct": 4.0,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "blessed_mace",
+              "sun_flail",
+              "seraph_staff"
+            ],
+            "armor": [
+              "leather_armor",
+              "sanctified_mail",
+              "dawnplate",
+              "aurora_raiment"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 3,
+            "IQ": 3,
+            "PIE": 6,
+            "VIT": 5,
+            "AGI": 2
+          },
+          "probability_pct": 3.97,
+          "equipment": {
+            "weapon": [
+              "sword_basic",
+              "blessed_mace",
+              "sun_flail",
+              "seraph_staff"
+            ],
+            "armor": [
+              "leather_armor",
+              "sanctified_mail",
+              "dawnplate",
+              "aurora_raiment"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": "other",
+          "probability_pct": 72.06
+        }
+      ]
+    },
+    "Mage": {
+      "distributions": [
+        {
+          "stats": {
+            "STR": 1,
+            "IQ": 7,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 3
+          },
+          "probability_pct": 3.22,
+          "equipment": {
+            "weapon": [
+              "arcane_staff",
+              "mind_focuser",
+              "eldritch_focus"
+            ],
+            "armor": [
+              "leather_armor",
+              "mystic_robe",
+              "astral_mantle",
+              "voidshroud"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 1,
+            "IQ": 6,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 3
+          },
+          "probability_pct": 2.89,
+          "equipment": {
+            "weapon": [
+              "arcane_staff",
+              "mind_focuser",
+              "eldritch_focus"
+            ],
+            "armor": [
+              "leather_armor",
+              "mystic_robe",
+              "astral_mantle",
+              "voidshroud"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 2,
+            "IQ": 6,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 3
+          },
+          "probability_pct": 2.77,
+          "equipment": {
+            "weapon": [
+              "arcane_staff",
+              "mind_focuser",
+              "eldritch_focus"
+            ],
+            "armor": [
+              "leather_armor",
+              "mystic_robe",
+              "astral_mantle",
+              "voidshroud"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 1,
+            "IQ": 7,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 2
+          },
+          "probability_pct": 2.38,
+          "equipment": {
+            "weapon": [
+              "arcane_staff",
+              "mind_focuser",
+              "eldritch_focus"
+            ],
+            "armor": [
+              "leather_armor",
+              "mystic_robe",
+              "astral_mantle",
+              "voidshroud"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": {
+            "STR": 2,
+            "IQ": 7,
+            "PIE": 3,
+            "VIT": 3,
+            "AGI": 2
+          },
+          "probability_pct": 2.33,
+          "equipment": {
+            "weapon": [
+              "arcane_staff",
+              "mind_focuser",
+              "eldritch_focus"
+            ],
+            "armor": [
+              "leather_armor",
+              "mystic_robe",
+              "astral_mantle",
+              "voidshroud"
+            ],
+            "accessory": [
+              "boots",
+              "helm",
+              "power_bracers",
+              "giant_girdle",
+              "focus_crystal",
+              "dreamcatch_talisman",
+              "rosary_chain",
+              "halo_band",
+              "ironroot_charm",
+              "stoneheart_amulet",
+              "windstep_ring",
+              "horizon_cloak"
+            ]
+          }
+        },
+        {
+          "stats": "other",
+          "probability_pct": 86.41
+        }
+      ]
+    }
+  }
+}

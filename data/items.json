@@ -17,22 +17,42 @@
     "id": "sword_basic",
     "name": "Sword",
     "type": "weapon",
-    "atk": 2,
-    "price": 60
+    "atk": 1,
+    "price": 60,
+    "req": {
+      "class": [
+        "Fighter",
+        "Rogue",
+        "Priest"
+      ],
+      "level": 1
+    },
+    "desc": "A dependable training blade."
   },
   {
     "id": "leather_armor",
     "name": "Leather Armor",
     "type": "armor",
     "ac": -1,
-    "price": 60
+    "price": 60,
+    "req": {
+      "class": [
+        "Fighter",
+        "Rogue",
+        "Priest",
+        "Mage"
+      ],
+      "level": 1
+    },
+    "desc": "Flexible leathers suited for novices."
   },
   {
     "id": "boots",
     "name": "Boots",
     "type": "accessory",
     "agi": 1,
-    "price": 50
+    "price": 50,
+    "desc": "Light footwear that sharpens footwork."
   },
   {
     "id": "cheese",
@@ -60,7 +80,445 @@
     "id": "helm",
     "name": "Helm",
     "type": "accessory",
+    "price": 40,
+    "vit": 1,
+    "desc": "A sturdy helm that bolsters resilience."
+  },
+  {
+    "id": "great_axe",
+    "name": "Great Axe",
+    "type": "weapon",
+    "atk": 3,
+    "price": 140,
+    "req": {
+      "class": "Fighter",
+      "level": 2
+    },
+    "desc": "A brutal axe that rewards raw strength.",
+    "hp": 2
+  },
+  {
+    "id": "titan_maul",
+    "name": "Titan Maul",
+    "type": "weapon",
+    "atk": 5,
+    "price": 220,
+    "req": {
+      "class": "Fighter",
+      "level": 3
+    },
+    "desc": "Only seasoned warriors can swing this colossal hammer.",
+    "hp": 4
+  },
+  {
+    "id": "steel_carapace",
+    "name": "Steel Carapace",
+    "type": "armor",
     "ac": -1,
-    "price": 40
+    "price": 150,
+    "req": {
+      "class": "Fighter",
+      "level": 2
+    },
+    "desc": "Heavy plates that trade mobility for protection.",
+    "hp": 4
+  },
+  {
+    "id": "colossus_plate",
+    "name": "Colossus Plate",
+    "type": "armor",
+    "price": 230,
+    "req": {
+      "class": "Fighter",
+      "level": 3
+    },
+    "desc": "An iron bulwark fit for champions of strength.",
+    "hp": 6
+  },
+  {
+    "id": "power_bracers",
+    "name": "Power Bracers",
+    "type": "accessory",
+    "price": 160,
+    "desc": "Bands that channel latent strength.",
+    "str": 1
+  },
+  {
+    "id": "giant_girdle",
+    "name": "Giant's Girdle",
+    "type": "accessory",
+    "price": 220,
+    "desc": "A reinforced belt that steadies massive blows.",
+    "str": 2,
+    "vit": 1
+  },
+  {
+    "id": "arcane_staff",
+    "name": "Arcane Staff",
+    "type": "weapon",
+    "atk": 1,
+    "price": 150,
+    "req": {
+      "class": "Mage",
+      "level": 2
+    },
+    "desc": "A focus carved with sigils for sharp-minded casters.",
+    "iq": 1,
+    "mp": 5
+  },
+  {
+    "id": "mind_focuser",
+    "name": "Mind Focuser",
+    "type": "weapon",
+    "price": 230,
+    "req": {
+      "class": "Mage",
+      "level": 3
+    },
+    "desc": "A crystal scepter that amplifies precision spellcraft.",
+    "iq": 2
+  },
+  {
+    "id": "mystic_robe",
+    "name": "Mystic Robe",
+    "type": "armor",
+    "price": 140,
+    "req": {
+      "class": "Mage",
+      "level": 2
+    },
+    "desc": "Layered silks warded to shield nimble scholars.",
+    "iq": 1
+  },
+  {
+    "id": "astral_mantle",
+    "name": "Astral Mantle",
+    "type": "armor",
+    "ac": -1,
+    "price": 220,
+    "req": {
+      "class": "Mage",
+      "level": 3
+    },
+    "desc": "Threaded with starlight for sages who dance around danger.",
+    "mp": 5
+  },
+  {
+    "id": "focus_crystal",
+    "name": "Focus Crystal",
+    "type": "accessory",
+    "price": 150,
+    "desc": "A palm crystal that clarifies thought.",
+    "iq": 1
+  },
+  {
+    "id": "dreamcatch_talisman",
+    "name": "Dreamcatch Talisman",
+    "type": "accessory",
+    "price": 230,
+    "desc": "Delicate threads that trap stray ideas.",
+    "iq": 2
+  },
+  {
+    "id": "blessed_mace",
+    "name": "Blessed Mace",
+    "type": "weapon",
+    "atk": 1,
+    "price": 150,
+    "req": {
+      "class": "Priest",
+      "level": 2
+    },
+    "desc": "Consecrated steel that strikes with radiant fervor.",
+    "pie": 1
+  },
+  {
+    "id": "sun_flail",
+    "name": "Sun Flail",
+    "type": "weapon",
+    "atk": 2,
+    "price": 220,
+    "req": {
+      "class": "Priest",
+      "level": 3
+    },
+    "desc": "A blazing flail that answers only to the devout.",
+    "pie": 2
+  },
+  {
+    "id": "sanctified_mail",
+    "name": "Sanctified Mail",
+    "type": "armor",
+    "price": 170,
+    "req": {
+      "class": "Priest",
+      "level": 2
+    },
+    "desc": "Mail links etched with prayers to deflect harm.",
+    "hp": 2,
+    "mp": 2
+  },
+  {
+    "id": "dawnplate",
+    "name": "Dawnplate",
+    "type": "armor",
+    "ac": -1,
+    "price": 240,
+    "req": {
+      "class": "Priest",
+      "level": 3
+    },
+    "desc": "Radiant armor that turns aside darkness for the faithful.",
+    "hp": 4,
+    "mp": 4
+  },
+  {
+    "id": "rosary_chain",
+    "name": "Rosary Chain",
+    "type": "accessory",
+    "price": 140,
+    "desc": "Prayer beads that soothe the spirit.",
+    "pie": 1
+  },
+  {
+    "id": "halo_band",
+    "name": "Halo Band",
+    "type": "accessory",
+    "price": 210,
+    "desc": "A radiant band that inspires faith.",
+    "pie": 2
+  },
+  {
+    "id": "crusher_pick",
+    "name": "Crusher Pick",
+    "type": "weapon",
+    "atk": 4,
+    "price": 150,
+    "req": {
+      "class": "Fighter",
+      "level": 2
+    },
+    "hp": 2,
+    "desc": "A rugged pick that channels sturdy might."
+  },
+  {
+    "id": "earthshaker_maul",
+    "name": "Earthshaker Maul",
+    "type": "weapon",
+    "atk": 5,
+    "price": 260,
+    "req": {
+      "class": "Fighter",
+      "level": 5
+    },
+    "hp": 4, 
+    "desc": "Dense stone and iron forged for unyielding guardians."
+  },
+  {
+    "id": "stonewall_armor",
+    "name": "Stonewall Armor",
+    "type": "armor",
+    "price": 220,
+    "req": {
+      "class": "Fighter",
+      "level": 3
+    },
+    "desc": "Layered plates that anchor defenders in place.",
+    "hp": 8
+  },
+  {
+    "id": "earthshell_plate",
+    "name": "Earthshell Plate",
+    "type": "armor",
+    "ac": -1,
+    "price": 340,
+    "req": {
+      "class": "Fighter",
+      "level": 5
+    },
+    "desc": "An adamant shell for those with unbreakable endurance.",
+    "hp": 12
+  },
+  {
+    "id": "ironroot_charm",
+    "name": "Ironroot Charm",
+    "type": "accessory",
+    "price": 150,
+    "desc": "A carved charm that roots the bearer.",
+    "vit": 1
+  },
+  {
+    "id": "stoneheart_amulet",
+    "name": "Stoneheart Amulet",
+    "type": "accessory",
+    "price": 240,
+    "desc": "Dense sigils harden the wearer.",
+    "vit": 2
+  },
+  {
+    "id": "wind_blades",
+    "name": "Wind Blades",
+    "type": "weapon",
+    "atk": 1,
+    "price": 140,
+    "req": {
+      "class": "Rogue",
+      "level": 2
+    },
+    "desc": "Paired blades that favor swift, precise fighters.",
+    "agi": 1
+  },
+  {
+    "id": "storm_knives",
+    "name": "Storm Knives",
+    "type": "weapon",
+    "atk": 2,
+    "price": 230,
+    "req": {
+      "class": "Rogue",
+      "level": 3
+    },
+    "desc": "Lightning-fast knives for masters of momentum.",
+    "agi": 2
+  },
+  {
+    "id": "shadow_jacket",
+    "name": "Shadow Jacket",
+    "type": "armor",
+    "ac": -2,
+    "price": 150,
+    "req": {
+      "class": "Rogue",
+      "level": 2
+    },
+    "desc": "Light leathers that bend with every sudden turn."
+  },
+  {
+    "id": "phantom_wrap",
+    "name": "Phantom Wrap",
+    "type": "armor",
+    "ac": -3,
+    "price": 240,
+    "req": {
+      "class": "Rogue",
+      "level": 3
+    },
+    "desc": "Shimmering cloth that slips between incoming strikes."
+  },
+  {
+    "id": "windstep_ring",
+    "name": "Windstep Ring",
+    "type": "accessory",
+    "agi": 2,
+    "price": 170,
+    "desc": "A ring that lightens each step."
+  },
+  {
+    "id": "horizon_cloak",
+    "name": "Horizon Cloak",
+    "type": "accessory",
+    "agi": 3,
+    "price": 260,
+    "desc": "Billowing cloth that extends every leap."
+  },
+  {
+    "id": "wyrmcleaver",
+    "name": "Wyrmcleaver",
+    "type": "weapon",
+    "atk": 7,
+    "price": 320,
+    "req": {
+      "class": "Fighter",
+      "level": 5
+    },
+    "desc": "A legend-forged blade that drinks the might of its wielder."
+  },
+  {
+    "id": "legion_bastion",
+    "name": "Legion Bastion",
+    "type": "armor",
+    "hp": 10,
+    "price": 320,
+    "req": {
+      "class": "Fighter",
+      "level": 5
+    },
+    "desc": "Reinforced plate that keeps veterans standing through sieges."
+  },
+  {
+    "id": "seraph_staff",
+    "name": "Seraph Staff",
+    "type": "weapon",
+    "atk": 3,
+    "pie": 3,
+    "price": 320,
+    "req": {
+      "class": "Priest",
+      "level": 5
+    },
+    "desc": "A staff blessed by the choir, merging blade and benediction."
+  },
+  {
+    "id": "aurora_raiment",
+    "name": "Aurora Raiment",
+    "type": "armor",
+    "ac": -1,
+    "hp": 4,
+    "mp": 4,
+    "price": 330,
+    "req": {
+      "class": "Priest",
+      "level": 5
+    },
+    "desc": "Luminous plates that fortify body and spirit alike."
+  },
+  {
+    "id": "eldritch_focus",
+    "name": "Eldritch Focus",
+    "type": "weapon",
+    "iq": 3,
+    "price": 320,
+    "req": {
+      "class": "Mage",
+      "level": 5
+    },
+    "desc": "An ancient conduit that pours vast mana into keen minds."
+  },
+  {
+    "id": "voidshroud",
+    "name": "Voidshroud",
+    "type": "armor",
+    "mp": 8,
+    "price": 320,
+    "req": {
+      "class": "Mage",
+      "level": 5
+    },
+    "desc": "A cloak of midnight threads that hoards arcane power."
+  },
+  {
+    "id": "shadow_rippers",
+    "name": "Shadow Rippers",
+    "type": "weapon",
+    "atk": 3,
+    "agi": 3,
+    "price": 320,
+    "req": {
+      "class": "Rogue",
+      "level": 5
+    },
+    "desc": "Razor-edged daggers that dance in the dark."
+  },
+  {
+    "id": "nightveil_cloak",
+    "name": "Nightveil Cloak",
+    "type": "armor",
+    "ac": -4,
+    "price": 330,
+    "req": {
+      "class": "Rogue",
+      "level": 5
+    },
+    "desc": "A cloak woven of shadow, favoring deadly grace."
   }
 ]
