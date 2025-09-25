@@ -1109,8 +1109,12 @@ class Editor:
                         generate_rooms_level(self)
                     elif event.key in (pygame.K_COMMA,):
                         self.doc = LevelDoc(max(0, self.doc.index - 1))
+                        # Rebuild the window so it matches the loaded level's dimensions
+                        self.screen = pygame.display.set_mode(window_dims())
                     elif event.key in (pygame.K_PERIOD,):
                         self.doc = LevelDoc(self.doc.index + 1)
+                        # Rebuild the window so it matches the loaded level's dimensions
+                        self.screen = pygame.display.set_mode(window_dims())
                     elif pygame.K_0 <= event.key <= pygame.K_8:
                         self.tool = event.key - pygame.K_0
                     elif event.key == pygame.K_DELETE:

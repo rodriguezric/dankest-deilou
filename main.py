@@ -698,10 +698,14 @@ class Dungeon:
                     lvl.grid[y][x] = T_TOWN
             except Exception:
                 pass
-        if arrival_pos is not None:
-            ax, ay = arrival_pos
-            lvl.stairs_up = (ax, ay)
-            lvl.grid[ay][ax] = T_STAIRS_U
+        if arrival_pos is not None and not lvl.stairs_up:
+            try:
+                ax, ay = int(arrival_pos[0]), int(arrival_pos[1])
+                lvl.stairs_up = (ax, ay)
+                if 0 <= ay < len(lvl.grid) and 0 <= ax < len(lvl.grid[0]):
+                    lvl.grid[ay][ax] = T_STAIRS_U
+            except Exception:
+                pass
         if not lvl.stairs_down:
             sx, sy = self._find_far_open(ix)
             lvl.stairs_down = (sx, sy)
@@ -4841,7 +4845,9 @@ class Game:
         self.level_ix += 1
         self.dun.ensure_level(self.level_ix, arrival_pos=down_pos)
         self.apply_level_state(self.level_ix)
-        self.pos = down_pos
+        nxt = self.dun.levels[self.level_ix]
+        target = nxt.stairs_up or down_pos
+        self.pos = target
         self.facing = 1
         self.mode = MODE_MAZE
         self.log.add(f"Descend to level {self.level_ix}.")
@@ -4994,6 +5000,20 @@ class Game:
             lvl = self.dun.levels[ix]
         except Exception:
             return
+        try:
+            if lvl.stairs_down and len(lvl.stairs_down) == 2:
+                x, y = int(lvl.stairs_down[0]), int(lvl.stairs_down[1])
+                if 0 <= y < len(lvl.grid) and 0 <= x < len(lvl.grid[0]):
+                    lvl.grid[y][x] = T_STAIRS_D
+        except Exception:
+            pass
+        try:
+            if lvl.stairs_up and len(lvl.stairs_up) == 2:
+                x, y = int(lvl.stairs_up[0]), int(lvl.stairs_up[1])
+                if 0 <= y < len(lvl.grid) and 0 <= x < len(lvl.grid[0]):
+                    lvl.grid[y][x] = T_STAIRS_U
+        except Exception:
+            pass
         saved = self.chests_state.get(ix)
         if isinstance(saved, list):
             lvl.chests = list(saved)
@@ -5017,7 +5037,9 @@ class Game:
             if pos and len(pos) == 2:
                 x, y = int(pos[0]), int(pos[1])
                 if 0 <= y < len(lvl.grid) and 0 <= x < len(lvl.grid[0]):
-                    lvl.grid[y][x] = T_TOWN
+                    tile = lvl.grid[y][x]
+                    if tile not in (T_STAIRS_D, T_STAIRS_U):
+                        lvl.grid[y][x] = T_TOWN
                     lvl.town_portal = (x, y)
         except Exception:
             pass
@@ -6040,7 +6062,9 @@ class Game:
             self.waypoint_positions[level_ix] = (x, y)
             lvl = self.dun.levels[level_ix]
             if 0 <= y < len(lvl.grid) and 0 <= x < len(lvl.grid[0]):
-                lvl.grid[y][x] = T_TOWN
+                tile = lvl.grid[y][x]
+                if tile not in (T_STAIRS_D, T_STAIRS_U):
+                    lvl.grid[y][x] = T_TOWN
             if getattr(lvl, 'town_portal', None) != (x, y):
                 lvl.town_portal = (x, y)
         except Exception:
