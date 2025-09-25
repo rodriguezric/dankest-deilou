@@ -161,11 +161,13 @@ def skills_menu():
                         skills.pop(i); save_json(path, data)
 
 # -------- Levels --------
-def base_grid(w=24,h=24):
-    g=[[1]*w for _ in range(h)]
-    for y in range(1,h-1):
-        for x in range(1,w-1):
-            g[y][x]=0
+def base_grid(w: int = 24, h: int = 24):
+    w = max(8, w)
+    h = max(8, h)
+    g = [[T_WALL] * w for _ in range(h)]
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            g[y][x] = T_EMPTY
     return g
 
 def print_grid(grid):
@@ -177,69 +179,135 @@ def level_menu():
     os.makedirs(LVL_DIR, exist_ok=True)
     while True:
         print("\nLevel editor: enter level index (number) or q to return")
-        s= input("> ").strip().lower()
-        if s=='q': break
+        s = input("> ").strip().lower()
+        if s == 'q':
+            break
         try:
-            ix=int(s)
-        except:
+            ix = int(s)
+        except Exception:
             continue
-        path=os.path.join(LVL_DIR, f'level{ix}.json')
-        data=load_json(path, {})
-        grid=data.get('grid') or base_grid()
-        enc=data.get('encounters') or {"monsters": [], "group": [1,3]}
-        stairs_down=data.get('stairs_down')
-        stairs_up=data.get('stairs_up')
-        town=data.get('town_portal')
+        path = os.path.join(LVL_DIR, f'level{ix}.json')
+        data = load_json(path, {})
+        size = data.get('size')
+        width = height = None
+        if isinstance(size, list) and len(size) == 2:
+            try:
+                width, height = int(size[0]), int(size[1])
+            except Exception:
+                width = height = None
+        grid_data = data.get('grid')
+        if isinstance(grid_data, list) and grid_data and isinstance(grid_data[0], list):
+            if width is None or height is None:
+                height = len(grid_data)
+                width = len(grid_data[0]) if grid_data[0] else 24
+            grid = base_grid(width, height)
+            for y in range(min(height, len(grid_data))):
+                row = grid_data[y]
+                for x in range(min(width, len(row))):
+                    try:
+                        grid[y][x] = int(row[x])
+                    except Exception:
+                        pass
+        else:
+            width = width or 24
+            height = height or 24
+            grid = base_grid(width, height)
+        enc = data.get('encounters') or {"monsters": [], "group": [1, 3]}
+        stairs_down = data.get('stairs_down')
+        stairs_up = data.get('stairs_up')
+        town = data.get('town_portal')
         while True:
             print(f"\nEditing level {ix}. Commands: show, set x y tile(0..4), rect x1 y1 x2 y2 tile, stairsdown x y targetLevel, stairsup x y, town x y, monsters, save, back")
-            cmd=input("> ").strip().lower().split()
-            if not cmd: continue
-            if cmd[0]=='back': break
-            if cmd[0]=='show':
+            cmd = input("> ").strip().lower().split()
+            if not cmd:
+                continue
+            if cmd[0] == 'back':
+                break
+            if cmd[0] == 'show':
                 print_grid(grid)
-                print(f"stairs_down={stairs_down} stairs_up={stairs_up} town_portal={town}")
+                print(f"size=({len(grid[0])}x{len(grid)}) stairs_down={stairs_down} stairs_up={stairs_up} town_portal={town}")
                 print(f"encounters: {enc}")
-            elif cmd[0]=='set' and len(cmd)==4:
-                x,y,t=map(int,cmd[1:])
-                if 0<=y<len(grid) and 0<=x<len(grid[0]):
-                    grid[y][x]=t
-            elif cmd[0]=='rect' and len(cmd)==6:
-                x1,y1,x2,y2,t=map(int,cmd[1:])
-                for y in range(min(y1,y2), max(y1,y2)+1):
-                    for x in range(min(x1,x2), max(x1,x2)+1):
-                        if 0<=y<len(grid) and 0<=x<len(grid[0]): grid[y][x]=t
-            elif cmd[0]=='stairsdown' and len(cmd)==4:
-                x,y,tgt=map(int,cmd[1:])
-                stairs_down=[x,y]; grid[y][x]=T_STAIRS_D
+            elif cmd[0] == 'set' and len(cmd) == 4:
+                x, y, t = map(int, cmd[1:])
+                if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                    grid[y][x] = t
+            elif cmd[0] == 'rect' and len(cmd) == 6:
+                x1, y1, x2, y2, t = map(int, cmd[1:])
+                for y in range(min(y1, y2), max(y1, y2) + 1):
+                    for x in range(min(x1, x2), max(x1, x2) + 1):
+                        if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                            grid[y][x] = t
+            elif cmd[0] == 'stairsdown' and len(cmd) == 4:
+                x, y, tgt = map(int, cmd[1:])
+                if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                    stairs_down = [x, y]
+                    grid[y][x] = T_STAIRS_D
                 # set backlink in target level as stairs_up at same coords by default
-                tpath=os.path.join(LVL_DIR, f'level{tgt}.json')
-                tdata=load_json(tpath,{})
-                tgrid=tdata.get('grid') or base_grid()
-                tdata['grid']=tgrid
-                tdata['stairs_up']=[x,y]
-                if 0<=y<len(tgrid) and 0<=x<len(tgrid[0]): tgrid[y][x]=T_STAIRS_U
-                save_json(tpath,tdata)
-            elif cmd[0]=='stairsup' and len(cmd)==3:
-                x,y=map(int,cmd[1:]); stairs_up=[x,y]; grid[y][x]=T_STAIRS_U
-            elif cmd[0]=='town' and len(cmd)==3:
-                if ix!=0:
-                    print('Town link only allowed on level 0'); continue
-                x,y=map(int,cmd[1:]); town=[x,y]; grid[y][x]=T_TOWN
-            elif cmd[0]=='monsters':
+                tpath = os.path.join(LVL_DIR, f'level{tgt}.json')
+                tdata = load_json(tpath, {})
+                tsize = tdata.get('size')
+                tw = th = None
+                if isinstance(tsize, list) and len(tsize) == 2:
+                    try:
+                        tw, th = int(tsize[0]), int(tsize[1])
+                    except Exception:
+                        pass
+                tgrid_data = tdata.get('grid')
+                if isinstance(tgrid_data, list) and tgrid_data and isinstance(tgrid_data[0], list):
+                    if tw is None or th is None:
+                        th = len(tgrid_data)
+                        tw = len(tgrid_data[0]) if tgrid_data[0] else len(grid[0])
+                    tgrid = base_grid(tw, th)
+                    for yy in range(min(th, len(tgrid_data))):
+                        row = tgrid_data[yy]
+                        for xx in range(min(tw, len(row))):
+                            try:
+                                tgrid[yy][xx] = int(row[xx])
+                            except Exception:
+                                pass
+                else:
+                    tw = tw or len(grid[0])
+                    th = th or len(grid)
+                    tgrid = base_grid(tw, th)
+                if 0 <= y < len(tgrid) and 0 <= x < len(tgrid[0]):
+                    tgrid[y][x] = T_STAIRS_U
+                tdata['grid'] = tgrid
+                tdata['stairs_up'] = [x, y]
+                tdata['size'] = [len(tgrid[0]), len(tgrid)]
+                save_json(tpath, tdata)
+            elif cmd[0] == 'stairsup' and len(cmd) == 3:
+                x, y = map(int, cmd[1:])
+                if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                    stairs_up = [x, y]
+                    grid[y][x] = T_STAIRS_U
+            elif cmd[0] == 'town' and len(cmd) == 3:
+                x, y = map(int, cmd[1:])
+                if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                    town = [x, y]
+                    grid[y][x] = T_TOWN
+            elif cmd[0] == 'monsters':
                 print(f"Current allowed monsters: {enc.get('monsters', [])} group={enc.get('group',[1,3])}")
                 ids = prompt('ids (comma-separated)', ','.join(enc.get('monsters', [])))
                 group = prompt('group (min,max)', '1,3')
                 try:
-                    mins,maxs=map(int,group.split(',')); enc['group']=[mins,maxs]
-                except:
+                    mins, maxs = map(int, group.split(','))
+                    enc['group'] = [mins, maxs]
+                except Exception:
                     pass
-                enc['monsters']=[i.strip() for i in ids.split(',') if i.strip()]
-            elif cmd[0]=='save':
-                data={'grid': grid, 'encounters': enc}
-                if stairs_down: data['stairs_down']=stairs_down
-                if stairs_up: data['stairs_up']=stairs_up
-                if town and ix==0: data['town_portal']=town
-                save_json(path,data)
+                enc['monsters'] = [i.strip() for i in ids.split(',') if i.strip()]
+            elif cmd[0] == 'save':
+                data = {
+                    'grid': grid,
+                    'encounters': enc,
+                    'size': [len(grid[0]), len(grid)]
+                }
+                if stairs_down:
+                    data['stairs_down'] = stairs_down
+                if stairs_up:
+                    data['stairs_up'] = stairs_up
+                if town:
+                    data['town_portal'] = town
+                save_json(path, data)
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
