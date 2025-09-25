@@ -74,6 +74,7 @@ MODE_SCENE = "SCENE"  # town<->labyrinth transition
 MODE_TRAIT = "TRAIT"   # post-creation trait selection
 MODE_DIALOG = "DIALOG" # NPC dialog
 MODE_QUESTS = "QUESTS" # Quests list
+MODE_WAYPOINT = "WAYPOINT"  # Waypoint fast-travel selection
 
 # Temple costs
 TEMPLE_HEAL_PARTY_COST = 30
@@ -634,8 +635,12 @@ class Dungeon:
                 sd = data.get('stairs_down'); su = data.get('stairs_up'); tp = data.get('town_portal')
                 lvl.stairs_down = tuple(sd) if isinstance(sd, list) and len(sd) == 2 else lvl.stairs_down
                 lvl.stairs_up = tuple(su) if isinstance(su, list) and len(su) == 2 else lvl.stairs_up
-                if ix == 0 and isinstance(tp, list) and len(tp) == 2:
-                    lvl.town_portal = tuple(tp)
+                if isinstance(tp, list) and len(tp) == 2:
+                    try:
+                        tx, ty = int(tp[0]), int(tp[1])
+                        lvl.town_portal = (tx, ty)
+                    except Exception:
+                        pass
                 # Encounters
                 enc = data.get('encounters', {})
                 mons = enc.get('monsters', [])
@@ -686,8 +691,13 @@ class Dungeon:
             pass
         if ix == 0 and not lvl.town_portal:
             lvl.town_portal = (2, 2)
-            x, y = lvl.town_portal
-            lvl.grid[y][x] = T_TOWN
+        if lvl.town_portal:
+            try:
+                x, y = int(lvl.town_portal[0]), int(lvl.town_portal[1])
+                if 0 <= y < len(lvl.grid) and 0 <= x < len(lvl.grid[0]):
+                    lvl.grid[y][x] = T_TOWN
+            except Exception:
+                pass
         if arrival_pos is not None:
             ax, ay = arrival_pos
             lvl.stairs_up = (ax, ay)
@@ -2905,6 +2915,10 @@ class Game:
         # New games start with party-level gold and no items
         self.party.gold = 100
         self.party.inventory = []
+        self.unlocked_waypoints: set = {0}
+        self.waypoint_positions: Dict[int, Tuple[int, int]] = {0: (2, 2)}
+        self.waypoint_options: List[int] = []
+        self.waypoint_index: int = 0
         self.refresh_party_gear_bonuses()
         self.mode = MODE_TITLE
         self.return_mode = MODE_TOWN
@@ -3334,6 +3348,8 @@ class Game:
             "doors": doors_ser,
             "elites": elites_ser,
             "quests": {k: v for k, v in self.quests_state.items()},
+            "waypoints": sorted(self.unlocked_waypoints),
+            "waypoint_positions": {str(k): list(v) for k, v in self.waypoint_positions.items()},
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -3349,6 +3365,31 @@ class Game:
             data = json.load(f)
         self.party = Party.from_dict(data.get("party", {}))
         self.refresh_party_gear_bonuses()
+        waypoints = data.get("waypoints")
+        if isinstance(waypoints, list):
+            try:
+                self.unlocked_waypoints = set(int(v) for v in waypoints)
+            except Exception:
+                self.unlocked_waypoints = {0}
+        else:
+            self.unlocked_waypoints = {0}
+        if 0 not in self.unlocked_waypoints:
+            self.unlocked_waypoints.add(0)
+        waypoint_pos = data.get("waypoint_positions")
+        if isinstance(waypoint_pos, dict):
+            wmap = {}
+            for k, v in waypoint_pos.items():
+                try:
+                    ix = int(k)
+                    if isinstance(v, (list, tuple)) and len(v) == 2:
+                        x, y = int(v[0]), int(v[1])
+                        wmap[ix] = (x, y)
+                except Exception:
+                    continue
+            if wmap:
+                self.waypoint_positions = wmap
+        if 0 not in self.waypoint_positions:
+            self.waypoint_positions[0] = (2, 2)
         self.level_ix = int(data.get("level", 0))
         self.dun.ensure_level(self.level_ix)
         # Restore fog-of-war and chests state
@@ -3576,17 +3617,11 @@ class Game:
             elif not self.party.all_active_alive():
                 self.log.add("All active members must be alive.")
             else:
-                self.level_ix = 0
-                self.dun.ensure_level(0)
-                # Apply persistent per-floor state (opened chests, unlocked doors)
-                try:
-                    self.apply_level_state(self.level_ix)
-                except Exception:
-                    pass
-                self.pos = (2, 2)
-                self.facing = 1
-                self.mode = MODE_MAZE
-                self.log.add("You descend into the Labyrinth...")
+                options = sorted(self.unlocked_waypoints) if getattr(self, 'unlocked_waypoints', None) else [0]
+                if len(options) <= 1 and (not options or options[0] == 0):
+                    self.enter_labyrinth_at_floor(0)
+                else:
+                    self.start_waypoint_select(options)
         elif ix == 7:
             # Equip from town
             self.equip_phase = 'member'
@@ -3613,6 +3648,88 @@ class Game:
             # Exit to title screen
             self.title_index = 0
             self.mode = MODE_TITLE
+
+    def start_waypoint_select(self, options: List[int]):
+        opts = sorted(set(options) | {0})
+        if len(opts) <= 1 and opts[0] == 0:
+            self.enter_labyrinth_at_floor(0)
+            return
+        self.waypoint_options = opts
+        self.waypoint_index = 0
+        self.mode = MODE_WAYPOINT
+
+    def draw_waypoint_select(self):
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        view.fill((18, 18, 24))
+        self.r.text_big(view, "Choose Waypoint", (20, 16))
+        floor_labels = []
+        for floor in self.waypoint_options:
+            label = f"Floor {floor + 1}"
+            if floor == 0:
+                label += " (Entrance)"
+            floor_labels.append(label)
+        options = floor_labels + ["Back"]
+        self.r.draw_center_menu(options, self.waypoint_index)
+
+    def waypoint_input(self, event):
+        if event.type != pygame.KEYDOWN:
+            return
+        total = len(self.waypoint_options) + 1  # + Back
+        if event.key in (pygame.K_UP, pygame.K_k):
+            self.waypoint_index = (self.waypoint_index - 1) % total
+            self.sfx.play('ui_move', 0.5)
+        elif event.key in (pygame.K_DOWN, pygame.K_j):
+            self.waypoint_index = (self.waypoint_index + 1) % total
+            self.sfx.play('ui_move', 0.5)
+        elif pygame.K_1 <= event.key <= pygame.K_9:
+            idx = event.key - pygame.K_1
+            if idx < total:
+                self.waypoint_index = idx
+                self._confirm_waypoint_selection()
+                return
+        elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+            self.sfx.play('ui_select', 0.6)
+            self._confirm_waypoint_selection()
+        elif event.key == pygame.K_ESCAPE:
+            self.mode = MODE_TOWN
+
+    def enter_labyrinth_at_floor(self, floor_ix: int):
+        try:
+            floor_ix = int(floor_ix)
+        except Exception:
+            floor_ix = 0
+        self.level_ix = floor_ix
+        self.dun.ensure_level(self.level_ix)
+        try:
+            self.apply_level_state(self.level_ix)
+        except Exception:
+            pass
+        lvl = self.dun.levels[self.level_ix]
+        pos = self.waypoint_positions.get(self.level_ix)
+        if not pos:
+            pos = getattr(lvl, 'town_portal', None)
+        if not pos or len(pos) != 2:
+            pos = (2, 2)
+        try:
+            px, py = int(pos[0]), int(pos[1])
+        except Exception:
+            px, py = 2, 2
+        self.pos = (px, py)
+        self.facing = 1
+        self.move_active = False
+        self.seen_by_level.setdefault(self.level_ix, set())
+        self.mode = MODE_MAZE
+        if self.level_ix == 0:
+            self.log.add("You descend into the Labyrinth...")
+        else:
+            self.log.add(f"You warp to Floor {self.level_ix + 1}.")
+
+    def _confirm_waypoint_selection(self):
+        if self.waypoint_index == len(self.waypoint_options):
+            self.mode = MODE_TOWN
+        else:
+            floor = self.waypoint_options[self.waypoint_index]
+            self.enter_labyrinth_at_floor(floor)
 
     # --------------- Party / Tavern ---------------
     def draw_party(self):
@@ -4621,6 +4738,7 @@ class Game:
         x, y = self.pos
         t = self.grid()[y][x]
         if t == T_TOWN:
+            self.unlock_waypoint(self.level_ix)
             self.mode = MODE_TOWN
             self.log.add("You return to town.")
         elif t == T_STAIRS_D:
@@ -4892,6 +5010,15 @@ class Game:
         try:
             if ix in self.elites_state:
                 lvl.elites = list(self.elites_state.get(ix, []))
+        except Exception:
+            pass
+        try:
+            pos = self.waypoint_positions.get(ix)
+            if pos and len(pos) == 2:
+                x, y = int(pos[0]), int(pos[1])
+                if 0 <= y < len(lvl.grid) and 0 <= x < len(lvl.grid[0]):
+                    lvl.grid[y][x] = T_TOWN
+                    lvl.town_portal = (x, y)
         except Exception:
             pass
 
@@ -5900,6 +6027,30 @@ class Game:
                 self._apply_gear_bonuses(m)
             except Exception:
                 pass
+
+    def unlock_waypoint(self, level_ix: int):
+        try:
+            level_ix = int(level_ix)
+        except Exception:
+            return
+        if level_ix not in self.unlocked_waypoints:
+            self.unlocked_waypoints.add(level_ix)
+        try:
+            x, y = int(self.pos[0]), int(self.pos[1])
+            self.waypoint_positions[level_ix] = (x, y)
+            lvl = self.dun.levels[level_ix]
+            if 0 <= y < len(lvl.grid) and 0 <= x < len(lvl.grid[0]):
+                lvl.grid[y][x] = T_TOWN
+            if getattr(lvl, 'town_portal', None) != (x, y):
+                lvl.town_portal = (x, y)
+        except Exception:
+            pass
+        if level_ix != 0:
+            try:
+                floor_label = level_ix + 1
+                self.log.add(f"Waypoint to Floor {floor_label} attuned.")
+            except Exception:
+                self.log.add("A new waypoint has been attuned.")
 
     def draw_equip(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -7634,6 +7785,8 @@ class Game:
                         self.items_input(event)
                     elif self.mode == MODE_EQUIP:
                         self.equip_input(event)
+                    elif self.mode == MODE_WAYPOINT:
+                        self.waypoint_input(event)
                     elif self.mode == MODE_DEFEAT:
                         self.defeat_input(event)
                     elif self.mode == MODE_VICTORY:
@@ -7691,6 +7844,8 @@ class Game:
                     self.draw_items()
                 elif self.mode == MODE_EQUIP:
                     self.draw_equip()
+                elif self.mode == MODE_WAYPOINT:
+                    self.draw_waypoint_select()
                 elif self.mode == MODE_DEFEAT:
                     self.draw_defeat()
                 elif self.mode == MODE_VICTORY:
