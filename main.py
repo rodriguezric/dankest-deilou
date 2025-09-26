@@ -621,16 +621,27 @@ class Dungeon:
                 # Grid
                 g = data.get('grid')
                 if isinstance(g, list) and g and isinstance(g[0], list):
-                    h = min(self.h, len(g))
-                    w = min(self.w, len(g[0]))
-                    newg = generate_base_grid(self.w, self.h)
-                    for y in range(h):
-                        for x in range(w):
-                            try:
-                                newg[y][x] = int(g[y][x])
-                            except Exception:
-                                pass
+                    try:
+                        json_h = len(g)
+                        json_w = max(len(row) for row in g if isinstance(row, list))
+                    except ValueError:
+                        json_h = len(g)
+                        json_w = 0
+                    json_h = max(1, json_h)
+                    json_w = max(1, json_w)
+                    newg = generate_base_grid(json_w, json_h)
+                    for y in range(json_h):
+                        row = g[y] if y < len(g) and isinstance(g[y], list) else []
+                        for x in range(json_w):
+                            if x < len(row):
+                                try:
+                                    newg[y][x] = int(row[x])
+                                except Exception:
+                                    pass
                     lvl.grid = newg
+                    # Expand dungeon bounds so procedurally created floors match the largest loaded grid
+                    self.w = max(self.w, json_w)
+                    self.h = max(self.h, json_h)
                 # Markers
                 sd = data.get('stairs_down'); su = data.get('stairs_up'); tp = data.get('town_portal')
                 lvl.stairs_down = tuple(sd) if isinstance(sd, list) and len(sd) == 2 else lvl.stairs_down
@@ -713,15 +724,17 @@ class Dungeon:
 
     def _find_far_open(self, ix: int) -> Tuple[int, int]:
         grid = self.levels[ix].grid
+        height = len(grid)
+        width = len(grid[0]) if height > 0 else 0
         candidates = []
-        for y in range(self.h - 5, 2, -1):
-            for x in range(self.w - 5, 2, -1):
-                if grid[y][x] == T_EMPTY:
+        for y in range(height - 5, 2, -1):
+            for x in range(width - 5, 2, -1):
+                if 0 <= y < height and 0 <= x < width and grid[y][x] == T_EMPTY:
                     candidates.append((x, y))
         if not candidates:
-            for y in range(1, self.h - 1):
-                for x in range(1, self.w - 1):
-                    if grid[y][x] == T_EMPTY:
+            for y in range(1, max(0, height - 1)):
+                for x in range(1, max(0, width - 1)):
+                    if 0 <= y < height and 0 <= x < width and grid[y][x] == T_EMPTY:
                         candidates.append((x, y))
         return random.choice(candidates) if candidates else (2, 2)
 
@@ -4679,7 +4692,12 @@ class Game:
         return self.dun.levels[self.level_ix].grid
 
     def in_bounds(self, x, y):
-        return self.dun.in_bounds(x, y)
+        grid = self.grid()
+        if not grid:
+            return False
+        height = len(grid)
+        width = len(grid[0]) if height > 0 else 0
+        return 0 <= y < height and 0 <= x < width
 
     def is_open(self, x, y):
         g = self.grid()
