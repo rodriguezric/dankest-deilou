@@ -685,5 +685,10 @@
   "town_portal": [
     2,
     2
+  ],
+  "stairs_down_target": [
+    1,
+    16,
+    16
   ]
 }
