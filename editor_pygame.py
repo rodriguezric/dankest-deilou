@@ -62,6 +62,7 @@ class LevelDoc:
         self.chests: List[Dict[str, Any]] = []
         self.npcs: List[Dict[str, Any]] = []
         self.elites: List[Dict[str, Any]] = []
+        self.stairs_down_target: Optional[Tuple[int, int, int]] = None  # (level_index, x, y)
         self.size: Tuple[int, int] = (W, H)
         self.load()
 
@@ -95,6 +96,15 @@ class LevelDoc:
         self.stairs_down = tuple(sd) if isinstance(sd, list) and len(sd)==2 else None
         self.stairs_up = tuple(su) if isinstance(su, list) and len(su)==2 else None
         self.town_portal = tuple(tp) if isinstance(tp, list) and len(tp)==2 else (self.town_portal if self.index==0 else None)
+        sdt = self.data.get('stairs_down_target')
+        if isinstance(sdt, list) and len(sdt) == 3:
+            try:
+                tgt_level = int(sdt[0]); tx = int(sdt[1]); ty = int(sdt[2])
+                self.stairs_down_target = (tgt_level, tx, ty)
+            except Exception:
+                self.stairs_down_target = None
+        else:
+            self.stairs_down_target = None
         self.encounters = self.data.get('encounters', self.encounters)
         # Load chests
         ch = self.data.get('chests', [])
@@ -166,6 +176,8 @@ class LevelDoc:
         if self.stairs_up: d['stairs_up'] = list(self.stairs_up)
         if self.index == 0 and self.town_portal:
             d['town_portal'] = list(self.town_portal)
+        if self.stairs_down_target:
+            d['stairs_down_target'] = list(self.stairs_down_target)
         save_json(self.path, d)
 
 class Editor:
@@ -221,8 +233,10 @@ class Editor:
         # Update markers
         if t == T_STAIRS_D:
             self.doc.stairs_down = (x, y)
+            self.doc.stairs_down_target = None
         elif prev == T_STAIRS_D and self.doc.stairs_down == (x, y):
             self.doc.stairs_down = None
+            self.doc.stairs_down_target = None
         if t == T_STAIRS_U:
             self.doc.stairs_up = (x, y)
         elif prev == T_STAIRS_U and self.doc.stairs_up == (x, y):
@@ -235,14 +249,25 @@ class Editor:
         elif prev == T_TOWN and self.doc.town_portal == (x, y):
             self.doc.town_portal = None
 
-    def prompt_input(self, prompt_text: str):
+    def prompt_input(self, prompt_text: str, initial_text: str = ''):
         self.input_active = True
         self.input_prompt = prompt_text
-        self.input_text = ''
+        self.input_text = initial_text or ''
 
     def handle_link_stairs_down(self, x, y):
         # prompt for target level index and target pos
-        self.prompt_input('Target level index:')
+        global W, H
+        existing = getattr(self.doc, 'stairs_down_target', None)
+        initial_level = ''
+        initial_pos = ''
+        if existing:
+            try:
+                lvl, px, py = existing
+                initial_level = str(lvl)
+                initial_pos = f"{px},{py}"
+            except Exception:
+                pass
+        self.prompt_input('Target level index:', initial_level)
         target_level = self.read_blocking_input()
         if target_level is None: return
         try:
@@ -250,7 +275,7 @@ class Editor:
         except:
             self.status = 'Invalid level index'
             return
-        self.prompt_input('Target position x,y:')
+        self.prompt_input('Target position x,y:', initial_pos)
         pos_str = self.read_blocking_input()
         if pos_str is None: return
         try:
@@ -260,13 +285,18 @@ class Editor:
             return
         # Ensure target level exists and has an upstairs backlink
         tgt_path = os.path.join(LEVEL_DIR, f'level{tgt_ix}.json')
+        # Preserve current editor canvas size while we touch the target level
+        prev_size = (W, H)
         tgt = LevelDoc(tgt_ix)
         tgt.grid[ty][tx] = T_STAIRS_U
         tgt.stairs_up = (tx, ty)
         tgt.save()
+        # Restore the original dimensions for the current document
+        W, H = prev_size
         # Set current stairs down and save
         self.doc.grid[y][x] = T_STAIRS_D
         self.doc.stairs_down = (x, y)
+        self.doc.stairs_down_target = (tgt_ix, tx, ty)
         self.doc.save()
         self.status = f'Linked down to level {tgt_ix} at {tx},{ty}'
 
@@ -615,11 +645,11 @@ class Editor:
             self.draw()
         return None
 
-    def read_elite_monster_id_input(self) -> Optional[str]:
+    def read_elite_monster_id_input(self, initial: Optional[str] = None) -> Optional[str]:
         # Prompt user with tab-completion and selection list filtered to elite-tier monsters
         self.input_active = True
         self.input_prompt = 'Elite monster id:'
-        self.input_text = ''
+        self.input_text = str(initial) if initial is not None else ''
         self.input_mode = 'elite_monster'
         self.input_suggestions = []
         self.suggestion_index = -1
@@ -700,11 +730,11 @@ class Editor:
             self.draw()
         return None
 
-    def read_pattern_input(self) -> Optional[str]:
+    def read_pattern_input(self, initial: Optional[str] = None) -> Optional[str]:
         # Prompt with tab-completion for elite movement pattern
         self.input_active = True
         self.input_prompt = 'Pattern (up_down/left_right):'
-        self.input_text = ''
+        self.input_text = str(initial) if initial is not None else ''
         self.input_mode = 'pattern'
         self.input_suggestions = []
         self.suggestion_index = -1
@@ -777,11 +807,11 @@ class Editor:
             self.draw()
         return None
 
-    def read_npc_id_input(self) -> Optional[str]:
+    def read_npc_id_input(self, initial: Optional[str] = None) -> Optional[str]:
         # Prompt user with tab-completion and selection list for NPC IDs
         self.input_active = True
         self.input_prompt = 'Enter NPC id:'
-        self.input_text = ''
+        self.input_text = str(initial) if initial is not None else ''
         self.input_mode = 'npc'
         self.input_suggestions = []
         self.suggestion_index = -1
@@ -857,11 +887,11 @@ class Editor:
             self.draw()
         return None
 
-    def read_item_id_input(self) -> Optional[str]:
+    def read_item_id_input(self, initial: Optional[str] = None) -> Optional[str]:
         # Prompt user to enter an item id with suggestions
         self.input_active = True
         self.input_prompt = 'Chest item id:'
-        self.input_text = ''
+        self.input_text = str(initial) if initial is not None else ''
         self.input_mode = 'item'
         self.input_suggestions = []
         self.suggestion_index = -1
@@ -1077,22 +1107,26 @@ class Editor:
                                         # Right-click a chest to set item id
                                         idx = next((i for i,c in enumerate(self.doc.chests) if c.get('x')==x and c.get('y')==y), None)
                                         if idx is not None:
-                                            iid = self.read_item_id_input()
+                                            current_iid = self.doc.chests[idx].get('iid')
+                                            iid = self.read_item_id_input(current_iid)
                                             if iid:
                                                 self.doc.chests[idx]['iid'] = iid
                                         # Right-click an NPC to set NPC id (with tab completion)
                                         idx = next((i for i,n in enumerate(self.doc.npcs) if n.get('x')==x and n.get('y')==y), None)
                                         if idx is not None:
-                                            nid = self.read_npc_id_input()
+                                            current_nid = self.doc.npcs[idx].get('id')
+                                            nid = self.read_npc_id_input(current_nid)
                                             if nid:
                                                 self.doc.npcs[idx]['id'] = nid
                                         # Right-click an Elite to set monster id and pattern (with tab completion)
                                         idx = next((i for i,e in enumerate(self.doc.elites) if e.get('x')==x and e.get('y')==y), None)
                                         if idx is not None:
-                                            mid = self.read_elite_monster_id_input()
+                                            current_mid = self.doc.elites[idx].get('id')
+                                            mid = self.read_elite_monster_id_input(current_mid)
                                             if mid:
                                                 self.doc.elites[idx]['id'] = mid
-                                            pat = self.read_pattern_input()
+                                            current_pat = self.doc.elites[idx].get('pattern')
+                                            pat = self.read_pattern_input(current_pat)
                                             if pat:
                                                 self.doc.elites[idx]['pattern'] = pat
                 elif event.type == pygame.KEYDOWN and not self.input_active:
@@ -1100,6 +1134,7 @@ class Editor:
                         self.doc.save(); self.status = f'Saved level {self.doc.index}'
                     elif event.key == pygame.K_r:
                         self.doc.grid = base_grid(); self.doc.stairs_down = self.doc.stairs_up = None
+                        self.doc.stairs_down_target = None
                         if self.doc.index == 0: self.doc.town_portal = (2, 2)
                     elif event.key == pygame.K_g:
                         self.gen_menu=True; self.file_menu=False; self.enc_menu=False
@@ -1128,6 +1163,7 @@ class Editor:
                         # Clear stair markers if present
                         if self.doc.stairs_down == (x, y):
                             self.doc.stairs_down = None
+                            self.doc.stairs_down_target = None
                         if self.doc.stairs_up == (x, y):
                             self.doc.stairs_up = None
                         if self.doc.town_portal == (x, y):
