@@ -35,6 +35,54 @@
     "gold_high": 0
   },
   {
+    "id": "bat",
+    "name": "Bat",
+    "archetype": "skirmisher",
+    "tier": "mob",
+    "gold_low": 1,
+    "gold_high": 6
+  },
+  {
+    "id": "skink",
+    "name": "Skink",
+    "archetype": "skirmisher",
+    "tier": "mob",
+    "gold_low": 1,
+    "gold_high": 7
+  },
+  {
+    "id": "ghost",
+    "name": "Ghost",
+    "archetype": "acolyte",
+    "tier": "mob",
+    "gold_low": 2,
+    "gold_high": 12
+  },
+  {
+    "id": "troll",
+    "name": "Troll",
+    "archetype": "bruiser",
+    "tier": "mob",
+    "gold_low": 6,
+    "gold_high": 20
+  },
+  {
+    "id": "imp",
+    "name": "Imp",
+    "archetype": "adept",
+    "tier": "mob",
+    "gold_low": 3,
+    "gold_high": 14
+  },
+  {
+    "id": "phantom",
+    "name": "Phantom",
+    "archetype": "mage",
+    "tier": "mob",
+    "gold_low": 4,
+    "gold_high": 16
+  },
+  {
     "id": "kobold",
     "name": "Kobold",
     "archetype": "skirmisher",
