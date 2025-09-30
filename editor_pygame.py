@@ -66,6 +66,22 @@ class LevelDoc:
         self.size: Tuple[int, int] = (W, H)
         self.load()
 
+    def _ensure_grid_capacity(self, min_w: int, min_h: int):
+        cur_h = len(self.grid)
+        cur_w = len(self.grid[0]) if self.grid else 0
+        if min_w <= cur_w and min_h <= cur_h:
+            return
+        new_w = max(cur_w, min_w)
+        new_h = max(cur_h, min_h)
+        for row in self.grid:
+            if len(row) < new_w:
+                row.extend([T_WALL] * (new_w - len(row)))
+        while len(self.grid) < new_h:
+            self.grid.append([T_WALL] * new_w)
+        global W, H
+        W, H = new_w, new_h
+        self.size = (new_w, new_h)
+
     def load(self):
         self.data = load_json(self.path, {})
         # Load size first (preserve editor canvas size)
@@ -154,11 +170,32 @@ class LevelDoc:
 
         # ensure markers reflected in grid
         if self.town_portal:
-            x,y = self.town_portal; self.grid[y][x] = T_TOWN
+            x,y = self.town_portal
+            if x < 0 or y < 0:
+                self.town_portal = None
+            else:
+                if y >= len(self.grid) or x >= len(self.grid[0]):
+                    self._ensure_grid_capacity(x+1, y+1)
+                if 0 <= y < len(self.grid) and 0 <= x < len(self.grid[0]):
+                    self.grid[y][x] = T_TOWN
         if self.stairs_down:
-            x,y = self.stairs_down; self.grid[y][x] = T_STAIRS_D
+            x,y = self.stairs_down
+            if x < 0 or y < 0:
+                self.stairs_down = None
+            else:
+                if y >= len(self.grid) or x >= len(self.grid[0]):
+                    self._ensure_grid_capacity(x+1, y+1)
+                if 0 <= y < len(self.grid) and 0 <= x < len(self.grid[0]):
+                    self.grid[y][x] = T_STAIRS_D
         if self.stairs_up:
-            x,y = self.stairs_up; self.grid[y][x] = T_STAIRS_U
+            x,y = self.stairs_up
+            if x < 0 or y < 0:
+                self.stairs_up = None
+            else:
+                if y >= len(self.grid) or x >= len(self.grid[0]):
+                    self._ensure_grid_capacity(x+1, y+1)
+                if 0 <= y < len(self.grid) and 0 <= x < len(self.grid[0]):
+                    self.grid[y][x] = T_STAIRS_U
 
     def save(self):
         d: Dict[str, Any] = {
@@ -288,8 +325,20 @@ class Editor:
         # Preserve current editor canvas size while we touch the target level
         prev_size = (W, H)
         tgt = LevelDoc(tgt_ix)
-        tgt.grid[ty][tx] = T_STAIRS_U
-        tgt.stairs_up = (tx, ty)
+        if 0 <= ty < len(tgt.grid) and 0 <= tx < len(tgt.grid[0]):
+            tgt.grid[ty][tx] = T_STAIRS_U
+            tgt.stairs_up = (tx, ty)
+        else:
+            # Expand target grid (and size metadata) so the new stairs fits
+            new_h = max(len(tgt.grid), ty + 1)
+            new_w = max(len(tgt.grid[0]), tx + 1)
+            for row in tgt.grid:
+                row.extend([T_WALL] * (new_w - len(row)))
+            while len(tgt.grid) < new_h:
+                tgt.grid.append([T_WALL] * new_w)
+            tgt.grid[ty][tx] = T_STAIRS_U
+            tgt.stairs_up = (tx, ty)
+            tgt.size = (new_w, new_h)
         tgt.save()
         # Restore the original dimensions for the current document
         W, H = prev_size
@@ -1308,6 +1357,7 @@ def generate_rooms_level(self: 'Editor'):
     # Create a 3x3 centered room for each marker, and center the marker in it
     centers: List[Tuple[int,int]] = []
     rooms: List[Tuple[int,int,int,int]] = []  # (left, top, w, h)
+    door_candidates: List[Tuple[int, int]] = []
     # First center each marker
     for x,y,t in _all_markers(self.doc):
         cx,cy=_clamp_center(x,y)
@@ -1350,10 +1400,130 @@ def generate_rooms_level(self: 'Editor'):
         for c in centers:
             if c not in seen:
                 seen.add(c); ordered.append(c)
+        def carve_corridor(x0: int, y0: int, x1: int, y1: int) -> List[Tuple[int, int]]:
+            path: List[Tuple[int, int]] = []
+            x, y = x0, y0
+            if x1 != x0:
+                step = 1 if x1 > x0 else -1
+                while x != x1:
+                    x += step
+                    if _in_bounds_xy(x, y) and not _is_marker(grid[y][x]):
+                        grid[y][x] = T_EMPTY
+                    path.append((x, y))
+            if y1 != y0:
+                step = 1 if y1 > y0 else -1
+                while y != y1:
+                    y += step
+                    if _in_bounds_xy(x, y) and not _is_marker(grid[y][x]):
+                        grid[y][x] = T_EMPTY
+                    path.append((x, y))
+            return path
+
+        seen_doors: set[Tuple[int, int]] = set()
         for i in range(1,len(ordered)):
             x0,y0=ordered[i-1]; x1,y1=ordered[i]
-            _carve_line(grid, x0, y0, x1, y1)
+            path = carve_corridor(x0, y0, x1, y1)
+            if len(path) > 2:
+                # Take the second step along the hallway so the door is not flush with the room entrance
+                candidate = path[1]
+                if _in_bounds_xy(*candidate) and grid[candidate[1]][candidate[0]] == T_EMPTY and candidate not in seen_doors:
+                    seen_doors.add(candidate)
+                    door_candidates.append(candidate)
     _ensure_borders(grid)
+    # Reset interactable objects for the fresh layout
+    self.doc.chests = []
+    self.doc.elites = []
+
+    def pick_item_for_floor() -> str:
+        floor_level = max(1, int(self.doc.index) + 1)
+        suitable: List[str] = []
+        higher: List[Tuple[int, str]] = []
+        for item in getattr(self, 'items', []) or []:
+            if not isinstance(item, dict):
+                continue
+            iid = item.get('id')
+            if not iid:
+                continue
+            req = item.get('req')
+            req_level = 0
+            if isinstance(req, dict):
+                lvl = req.get('level')
+                if isinstance(lvl, (int, float)):
+                    req_level = int(lvl)
+            if req_level <= floor_level:
+                suitable.append(str(iid))
+            else:
+                higher.append((req_level, str(iid)))
+        if suitable:
+            return random.choice(suitable)
+        if higher:
+            higher.sort(key=lambda tpl: tpl[0])
+            return higher[0][1]
+        return 'potion_small'
+
+    # Place treasures in distinct 3x3 rooms
+    three_by_three_centers: List[Tuple[int, int]] = []
+    for left, top, w, h in rooms:
+        if w == 3 and h == 3:
+            cx, cy = left + w//2, top + h//2
+            if _in_bounds_xy(cx, cy) and grid[cy][cx] == T_EMPTY:
+                three_by_three_centers.append((cx, cy))
+    random.shuffle(three_by_three_centers)
+    if three_by_three_centers:
+        max_chests = min(2, len(three_by_three_centers))
+        desired = random.randint(1, max_chests)
+        chosen_chests: List[Tuple[int, int]] = []
+        for cx, cy in three_by_three_centers:
+            if all(abs(cx - ox) + abs(cy - oy) >= 4 for ox, oy in chosen_chests):
+                chosen_chests.append((cx, cy))
+            if len(chosen_chests) >= desired:
+                break
+        for cx, cy in chosen_chests:
+            self.doc.chests.append({'x': cx, 'y': cy, 'iid': pick_item_for_floor()})
+
+    # Add doors near the start of select hallways and ensure they sit within the hall
+    filtered_doors = [pos for pos in door_candidates if grid[pos[1]][pos[0]] == T_EMPTY]
+    if filtered_doors:
+        num_doors = random.randint(1, min(3, len(filtered_doors)))
+        for dx, dy in random.sample(filtered_doors, num_doors):
+            grid[dy][dx] = T_LOCKED
+
+    # Drop in a single elite inside a room
+    candidate_elite_spots = [
+        (left + w//2, top + h//2)
+        for left, top, w, h in rooms
+        if _in_bounds_xy(left + w//2, top + h//2)
+        and grid[top + h//2][left + w//2] == T_EMPTY
+    ]
+    chest_positions = {(c['x'], c['y']) for c in self.doc.chests}
+    candidate_elite_spots = [pos for pos in candidate_elite_spots if pos not in chest_positions]
+    if candidate_elite_spots:
+        ex, ey = random.choice(candidate_elite_spots)
+        elite_ids = [str(m.get('id')) for m in getattr(self, 'monsters', []) if isinstance(m, dict) and str(m.get('tier', '')).lower() == 'elite' and m.get('id')]
+        elite_id = elite_ids and random.choice(elite_ids) or 'goblin_chief'
+        pattern = random.choice(['up_down', 'left_right'])
+        self.doc.elites.append({'x': ex, 'y': ey, 'id': elite_id, 'pattern': pattern})
+
+    # Place a downstairs at least three tiles from the border
+    occupied = chest_positions.copy()
+    if self.doc.elites:
+        occupied.add((self.doc.elites[0]['x'], self.doc.elites[0]['y']))
+    stair_candidates = [
+        (x, y)
+        for y in range(3, max(3, H - 3))
+        for x in range(3, max(3, W - 3))
+        if grid[y][x] == T_EMPTY and (x, y) not in occupied
+    ]
+    if not stair_candidates:
+        stair_candidates = [(x, y) for y in range(1, H-1) for x in range(1, W-1) if grid[y][x] == T_EMPTY]
+    if stair_candidates:
+        sx, sy = random.choice(stair_candidates)
+        grid[sy][sx] = T_STAIRS_D
+        self.doc.stairs_down = (sx, sy)
+        self.doc.stairs_down_target = None
+    else:
+        self.doc.stairs_down = None
+
     self.doc.grid = grid
     _reapply_markers(self.doc, self.doc.grid)
     self.status = 'Generated rooms + halls'
