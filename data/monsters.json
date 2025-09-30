@@ -27,6 +27,14 @@
     "gold_high": 18
   },
   {
+    "id": "bone_pile",
+    "name": "Bone Pile",
+    "archetype": "acolyte",
+    "tier": "mob",
+    "gold_low": 0,
+    "gold_high": 0
+  },
+  {
     "id": "kobold",
     "name": "Kobold",
     "archetype": "skirmisher",
