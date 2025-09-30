@@ -779,6 +779,7 @@ class Renderer:
             'bleed': RED,
             'poison': GREEN,
             'regen': YELLOW,
+            'reassemble': (120, 220, 160),
             'blind': GRAY,
             'vulnerable': (240, 140, 60),  # orange
             'weak': BLUE,
@@ -1198,7 +1199,7 @@ class Renderer:
             self.text_small(view, f"MP {m.mp}/{m.max_mp}", (rx + w // 2 + 8, ry + 26), WHITE)
             # Status stacks at bottom
             stacks: List[Tuple[str, Tuple[int, int, int]]] = []
-            order = ['bleed', 'poison', 'regen', 'blind', 'vulnerable', 'weak', 'stun']
+            order = ['bleed', 'poison', 'regen', 'reassemble', 'blind', 'vulnerable', 'weak', 'stun']
             for key in order:
                 try:
                     cnt = int(getattr(m, 'statuses', {}).get(key, 0))
@@ -1287,7 +1288,7 @@ class Renderer:
                 self.text_small(view, f"HP {max(0,e.hp):>2}", (rx + 8, ry + 26), WHITE)
                 # Status stacks at bottom
                 stacks: List[Tuple[str, Tuple[int, int, int]]] = []
-                order = ['bleed', 'poison', 'regen', 'blind', 'vulnerable', 'weak', 'stun']
+                order = ['bleed', 'poison', 'regen', 'reassemble', 'blind', 'vulnerable', 'weak', 'stun']
                 for key in order:
                     try:
                         cnt = int(getattr(e, 'statuses', {}).get(key, 0))
@@ -1422,6 +1423,7 @@ class Battle:
         self.goblin_steal_used: Dict[int, bool] = {}
         self.escaped_enemies: set = set()
         self.enemy_spin: Dict[int, Dict[str, int]] = {}
+        self.pending_bone_piles: Dict[int, Dict[str, Any]] = {}
         self.kobold_dart_fx: Dict[int, Dict[str, Any]] = {}
         # Slime Mind (elite) support
         self._slime_mind_ids = set(['slime_mind'])
@@ -1456,6 +1458,75 @@ class Battle:
         except Exception:
             pass
 
+    def _schedule_bone_pile(self, idx: int, hp: int):
+        if idx < 0:
+            return
+        self.pending_bone_piles[idx] = {'hp': max(1, int(hp))}
+
+    def _process_pending_bone_piles(self):
+        if not self.pending_bone_piles:
+            return
+        for idx, info in list(self.pending_bone_piles.items()):
+            if not (0 <= idx < len(self.enemies)):
+                self.pending_bone_piles.pop(idx, None)
+                continue
+            if idx in self.dying_enemies:
+                continue
+            if getattr(self.enemies[idx], 'hp', 0) > 0:
+                self.pending_bone_piles.pop(idx, None)
+                continue
+            base = self.monsters_by_id.get('bone_pile', {})
+            if not base:
+                self.pending_bone_piles.pop(idx, None)
+                continue
+            pile = Enemy.from_base(base, floor_num=self.floor_num)
+            new_hp = max(1, int(info.get('hp', pile.hp)))
+            pile.hp = new_hp
+            try:
+                pile.max_hp = max(int(getattr(pile, 'max_hp', new_hp)), new_hp)
+            except Exception:
+                pile.max_hp = new_hp
+            self.enemies[idx] = pile
+            self.dying_enemies.pop(idx, None)
+            self._status_set('enemy', idx, 'reassemble', 2)
+            try:
+                self.effects.trigger('enemy', idx, 360, 7, GREEN)
+            except Exception:
+                pass
+            self.log.add("The shattered bones collapse into a pile!")
+            self.build_turn_order()
+            for pos, tok in enumerate(self.turn_order):
+                if tok == ('enemy', idx):
+                    self.turn_pos = pos
+                    break
+            self.pending_bone_piles.pop(idx, None)
+
+    def _bone_pile_transform(self, idx: int):
+        if not (0 <= idx < len(self.enemies)):
+            return
+        pile = self.enemies[idx]
+        base = self.monsters_by_id.get('skeleton', {})
+        if not base:
+            return
+        new_enemy = Enemy.from_base(base, floor_num=self.floor_num)
+        new_hp = max(1, int(getattr(pile, 'hp', 1)))
+        new_enemy.hp = new_hp
+        try:
+            new_enemy.max_hp = max(int(getattr(new_enemy, 'max_hp', new_hp)), new_hp)
+        except Exception:
+            new_enemy.max_hp = new_hp
+        self.enemies[idx] = new_enemy
+        try:
+            self.effects.trigger('enemy', idx, 420, 7, WHITE)
+        except Exception:
+            pass
+        self.log.add(f"{new_enemy.name} reforms from the bone pile!")
+        self.build_turn_order()
+        for pos, tok in enumerate(self.turn_order):
+            if tok == ('enemy', idx):
+                self.turn_pos = pos
+                break
+
     def _on_enemy_defeated(self, idx: int):
         """Hook for enemy death to trigger Slime Mind regen on allied slime death."""
         try:
@@ -1466,6 +1537,9 @@ class Battle:
                 for i, e in enumerate(self.enemies):
                     if getattr(e, 'hp', 0) > 0 and getattr(e, 'id', '') in self._slime_mind_ids:
                         self._status_set('enemy', i, 'regen', 2)
+            elif getattr(died, 'id', '') == 'skeleton':
+                hp_source = max(1, int(getattr(died, 'max_hp', getattr(died, 'hp', 1))))
+                self._schedule_bone_pile(idx, max(1, hp_source // 2))
         except Exception:
             pass
 
@@ -1533,7 +1607,7 @@ class Battle:
         # Log on first application
         if old == 0 and new > 0:
             who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
-            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak'}.get(name, name.title())
+            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak','reassemble':'Reassemble'}.get(name, name.title())
             self.log.add(f"{who} gains {label} ({new}).")
 
     def _status_set(self, side: str, ix: int, name: str, stacks: int):
@@ -1551,7 +1625,7 @@ class Battle:
         # Log on expiry
         if prev > 0 and stacks <= 0:
             who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
-            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak'}.get(name, name.title())
+            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak','reassemble':'Reassemble'}.get(name, name.title())
             self.log.add(f"{label} on {who} expires.")
 
     def _status_dec(self, side: str, ix: int, name: str, amt: int = 1):
@@ -1788,6 +1862,31 @@ class Battle:
                 return {'type': 'kobold_poison_dart', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
                         'label': f"{e.name} fires a poison dart at {t.name}!"}
+        if mid == 'skeleton':
+            r = random.random()
+            if r < 0.7:
+                hit = random.random() < 0.68
+                dmg = random.randint(e.atk_low, e.atk_high)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} slashes at {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
+            hit = random.random() < 0.7
+            dmg = random.randint(e.atk_low + 1, e.atk_high + 2)
+            return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                    'target_side': 'party', 'target_index': gi,
+                    'hit': hit, 'dmg': dmg, 'label': f"{e.name} smashes {t.name} with Bone Bash!",
+                    'miss_label': f"{e.name}'s Bone Bash whiffs past {t.name}.",
+                    'bone_bash': True}
+        if mid == 'bone_pile':
+            stacks = self._status_get('enemy', ix, 'reassemble')
+            if stacks <= 0:
+                return {'type': 'bone_pile_reform', 'actor_side': 'enemy', 'actor_index': ix,
+                        'label': f"{e.name} erupts into a new form!"}
+            remaining = max(0, stacks - 1)
+            return {'type': 'bone_pile_wait', 'actor_side': 'enemy', 'actor_index': ix,
+                    'label': f"{e.name} rattles and knits itself together... ({remaining} turns)",
+                    'stacks': stacks}
         # Giant Rat
         if mid == 'giant_rat':
             r = random.random()
@@ -2100,6 +2199,10 @@ class Battle:
         if action.get('type') == 'censor_mana_burn':
             # Allow longer charge-up for the mana drain
             self.anim['dur'] = [260, 520, 260, 200]
+        if action.get('bone_bash'):
+            self.anim['dur'] = [260, 220, 260, 200]
+        if action.get('type') in ('bone_pile_wait', 'bone_pile_reform'):
+            self.anim['dur'] = [200, 160, 200, 140]
         # Goblin chief custom timings
         if action.get('type') == 'goblin_devour':
             # Move to goblin, eat, return
@@ -2197,6 +2300,7 @@ class Battle:
             gi: fx for gi, fx in self.kobold_dart_fx.items()
             if now - fx.get('start', now) < fx.get('dur', 520)
         }
+        self._process_pending_bone_piles()
         # Safety: if all enemies are defeated and no death animations remain, finalize victory
         if not self.battle_over and not self.dying_enemies and not self.enemy_alive():
             self.finish_victory()
@@ -2336,6 +2440,9 @@ class Battle:
                             # animate a brief downed effect
                             self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
                         self.effects.trigger('party', gi, 300, 7)
+                        if act.get('bone_bash') and act.get('hit'):
+                            self._status_add('party', gi, 'vulnerable', 1)
+                            self.add_floater('party', gi, 'VULN', 700, YELLOW)
                 self.log.add(act.get('label', 'A hit lands.'))
             else:
                 idx = act['target_index']
@@ -2379,6 +2486,30 @@ class Battle:
                     'surface': None,
                 }
                 self.censor_music_fade_pending = True
+        elif act['type'] == 'bone_pile_wait':
+            ix = act.get('actor_index', -1)
+            if 0 <= ix < len(self.enemies):
+                stacks_before = max(0, int(self._status_get('enemy', ix, 'reassemble')))
+                label = act.get('label')
+                if label:
+                    self.log.add(label)
+                else:
+                    remaining = max(0, stacks_before - 1)
+                    self.log.add(f"{self.enemies[ix].name} clatters together ({remaining} turns remain).")
+                if stacks_before > 0:
+                    self._status_dec('enemy', ix, 'reassemble', 1)
+                try:
+                    self.effects.trigger('enemy', ix, 320, 6, GREEN)
+                except Exception:
+                    pass
+                if self._status_get('enemy', ix, 'reassemble') <= 0:
+                    self._bone_pile_transform(ix)
+        elif act['type'] == 'bone_pile_reform':
+            ix = act.get('actor_index', -1)
+            if 0 <= ix < len(self.enemies):
+                if act.get('label'):
+                    self.log.add(act['label'])
+                self._bone_pile_transform(ix)
         elif act['type'] == 'censor_mana_burn':
             gi = act.get('target_index', -1)
             base_dmg = max(0, int(act.get('dmg', 0)))
@@ -2941,12 +3072,14 @@ class Battle:
         self.battle_over = True
         self.result = 'victory'
         self.kobold_dart_fx.clear()
+        self.pending_bone_piles.clear()
 
     def finish_defeat(self):
         self.log.add("The party has fallen...")
         self.battle_over = True
         self.result = 'defeat'
         self.kobold_dart_fx.clear()
+        self.pending_bone_piles.clear()
 
     # ---- Player action creators ----
     def make_attack_action(self, actor: Character, target_i: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -4036,7 +4169,7 @@ class Game:
             right_y += 8
             self.r.text(view, "Status Effects:", (right_x, right_y)); right_y += 20
             # Build stacks in the same order and style as battle windows
-            order = ['bleed', 'poison', 'regen', 'blind', 'vulnerable', 'weak', 'stun']
+            order = ['bleed', 'poison', 'regen', 'reassemble', 'blind', 'vulnerable', 'weak', 'stun']
             stacks = []
             for key in order:
                 try:
@@ -6939,6 +7072,46 @@ class Game:
                         offsets_enemy_x[ai] = int(dx_full * (p * p))
                     elif stage == 2:
                         offsets_enemy[ai] = dy_full + int(10 * abs(math.sin(p * math.pi)))
+                        offsets_enemy_x[ai] = dx_full
+                    elif stage == 3:
+                        offsets_enemy[ai] = int(dy_full * (1.0 - p))
+                        offsets_enemy_x[ai] = int(dx_full * (1.0 - p))
+                elif act.get('bone_bash') and len(durs) >= 4:
+                    gap = 16
+                    alive_e = [i for i, en in enumerate(b.enemies) if en.hp > 0]
+                    if ai not in alive_e:
+                        alive_e.append(ai)
+                    alive_e = sorted(set(alive_e))
+                    ne = max(1, len(alive_e))
+                    we = min(220, (WIDTH - gap * (ne + 1)) // max(1, ne))
+                    total_e = ne * we + (ne + 1) * gap
+                    xse = (WIDTH - total_e) // 2 + gap
+                    j_ai = alive_e.index(ai) if ai in alive_e else 0
+                    src_cx = xse + j_ai * (we + gap) + we // 2
+                    enemy_y = 28
+                    members = [self.party.members[i] for i in self.party.active
+                               if 0 <= i < len(self.party.members)
+                               and self.party.members[i].alive and self.party.members[i].hp > 0]
+                    n = max(1, len(members))
+                    w = min(220, (WIDTH - gap * (n + 1)) // max(1, n))
+                    total_p = n * w + (n + 1) * gap
+                    xsp = (WIDTH - total_p) // 2 + gap
+                    col_t = 0
+                    for idx, m in enumerate(members):
+                        try:
+                            if self.party.members.index(m) == ti:
+                                col_t = idx; break
+                        except Exception:
+                            pass
+                    dst_cx = xsp + col_t * (w + gap) + w // 2
+                    base_party_y = VIEW_H - 60 - 16
+                    dy_full = base_party_y - enemy_y
+                    dx_full = dst_cx - src_cx
+                    if stage == 1:
+                        offsets_enemy[ai] = int(dy_full * (p * p))
+                        offsets_enemy_x[ai] = int(dx_full * (p * p))
+                    elif stage == 2:
+                        offsets_enemy[ai] = dy_full + int(8 * math.sin(p * math.pi))
                         offsets_enemy_x[ai] = dx_full
                     elif stage == 3:
                         offsets_enemy[ai] = int(dy_full * (1.0 - p))
