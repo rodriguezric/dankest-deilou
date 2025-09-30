@@ -1760,6 +1760,33 @@ class Battle:
         gi = self.party.members.index(t)
         # Dispatch by id
         mid = getattr(e, 'id', e.name.lower())
+        # Kobold
+        if mid == 'kobold':
+            alive_idxs = [j for j, en in enumerate(self.enemies) if getattr(en, 'hp', 0) > 0]
+            alone = len(alive_idxs) == 1 and alive_idxs[0] == ix
+            # If alone, 50% chance to attempt Pack Yip; otherwise follow normal routine
+            if alone and random.random() < 0.5:
+                success = random.random() < 0.5
+                return {
+                    'type': 'kobold_pack_yip',
+                    'actor_side': 'enemy', 'actor_index': ix,
+                    'label': f"{e.name} lets out a piercing pack yip!",
+                    'fail_label': f"No packmates answer {e.name}'s call.",
+                    'success_label': 'Another kobold scurries into the fight!',
+                    'success': success,
+                }
+            r = random.random()
+            if r < 0.7:
+                hit = random.random() < 0.65
+                dmg = random.randint(e.atk_low, e.atk_high)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} slashes at {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
+            else:
+                return {'type': 'kobold_poison_dart', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'label': f"{e.name} fires a poison dart at {t.name}!"}
         # Giant Rat
         if mid == 'giant_rat':
             r = random.random()
@@ -2500,6 +2527,51 @@ class Battle:
                 self.log.add(act.get('label', f"A goblin hits {t.name} for {dmg}."))
             # Rebuild order to remove the thrown goblin from initiative
             self.build_turn_order()
+        elif act['type'] == 'kobold_poison_dart':
+            gi = act.get('target_index', -1)
+            label = act.get('label')
+            if label:
+                self.log.add(label)
+            if 0 <= gi < len(self.party.members):
+                self._status_add('party', gi, 'poison', 2)
+                self.add_floater('party', gi, 'POISON', 700, GREEN)
+                try:
+                    self.effects.trigger('party', gi, 360, 8, GREEN)
+                except Exception:
+                    pass
+        elif act['type'] == 'kobold_pack_yip':
+            ix = act.get('actor_index', -1)
+            label = act.get('label')
+            if label:
+                self.log.add(label)
+            if not (0 <= ix < len(self.enemies)):
+                return
+            if act.get('success'):
+                base = self.monsters_by_id.get('kobold', {})
+                if base:
+                    newcomer = Enemy.from_base(base, floor_num=self.floor_num)
+                    self.enemies.append(newcomer)
+                    success_label = act.get('success_label')
+                    if success_label:
+                        self.log.add(success_label)
+                    new_ix = len(self.enemies) - 1
+                    try:
+                        self.effects.trigger('enemy', new_ix, 360, 7, GREEN)
+                    except Exception:
+                        pass
+                    # Rebuild turn order so the newcomer can act and keep current kobold's position stable
+                    caller_idx = ix
+                    self.build_turn_order()
+                    for pos, tok in enumerate(self.turn_order):
+                        if tok == ('enemy', caller_idx):
+                            self.turn_pos = pos
+                            break
+                else:
+                    self.log.add('But nothing appears...')
+            else:
+                fail_label = act.get('fail_label')
+                if fail_label:
+                    self.log.add(fail_label)
         elif act['type'] == 'defend':
             gi = act.get('actor_index')
             if gi is not None:
