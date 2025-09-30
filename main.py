@@ -1422,6 +1422,7 @@ class Battle:
         self.goblin_steal_used: Dict[int, bool] = {}
         self.escaped_enemies: set = set()
         self.enemy_spin: Dict[int, Dict[str, int]] = {}
+        self.kobold_dart_fx: Dict[int, Dict[str, Any]] = {}
         # Slime Mind (elite) support
         self._slime_mind_ids = set(['slime_mind'])
         # The Censor state
@@ -2093,6 +2094,9 @@ class Battle:
         # Slime 'splash' (spray) projectile travel time
         if action.get('type') == 'splash':
             self.anim['dur'] = [240, 1000, 240, 180]
+        if action.get('type') == 'kobold_poison_dart':
+            # Fast dart: short windup and quick travel
+            self.anim['dur'] = [200, 220, 220, 160]
         if action.get('type') == 'censor_mana_burn':
             # Allow longer charge-up for the mana drain
             self.anim['dur'] = [260, 520, 260, 200]
@@ -2189,6 +2193,10 @@ class Battle:
         # prune finished defeat animations
         self.dying_enemies = {i: d for i, d in self.dying_enemies.items() if now - d['start'] < d['dur']}
         self.downed_party = {i: d for i, d in self.downed_party.items() if now - d['start'] < d['dur']}
+        self.kobold_dart_fx = {
+            gi: fx for gi, fx in self.kobold_dart_fx.items()
+            if now - fx.get('start', now) < fx.get('dur', 520)
+        }
         # Safety: if all enemies are defeated and no death animations remain, finalize victory
         if not self.battle_over and not self.dying_enemies and not self.enemy_alive():
             self.finish_victory()
@@ -2533,10 +2541,17 @@ class Battle:
             if label:
                 self.log.add(label)
             if 0 <= gi < len(self.party.members):
+                now = pygame.time.get_ticks()
                 self._status_add('party', gi, 'poison', 2)
                 self.add_floater('party', gi, 'POISON', 700, GREEN)
                 try:
                     self.effects.trigger('party', gi, 360, 8, GREEN)
+                except Exception:
+                    pass
+                self.kobold_dart_fx[gi] = {'start': now, 'dur': 520}
+                try:
+                    if self.sfx:
+                        self.sfx.play('party_hurt', 0.7)
                 except Exception:
                     pass
         elif act['type'] == 'kobold_pack_yip':
@@ -2925,11 +2940,13 @@ class Battle:
         self.victory_loot = loot_counts
         self.battle_over = True
         self.result = 'victory'
+        self.kobold_dart_fx.clear()
 
     def finish_defeat(self):
         self.log.add("The party has fallen...")
         self.battle_over = True
         self.result = 'defeat'
+        self.kobold_dart_fx.clear()
 
     # ---- Player action creators ----
     def make_attack_action(self, actor: Character, target_i: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -7052,6 +7069,41 @@ class Game:
         enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog, offsets_enemy, offsets_enemy_x, rotations_enemy) if b else {}
         party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting, offsets_party, offsets_party_x)
 
+        if b and b.kobold_dart_fx:
+            now = pygame.time.get_ticks()
+            for gi, fx in list(b.kobold_dart_fx.items()):
+                rect = party_rects.get(gi)
+                if not rect:
+                    continue
+                start = fx.get('start', now)
+                dur = max(1, int(fx.get('dur', 520)))
+                elapsed = now - start
+                if elapsed < 0 or elapsed >= dur:
+                    continue
+                prog = max(0.0, min(1.0, elapsed / float(dur)))
+                bubble = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+                center_x = rect.width // 2
+                base_y = rect.height // 2
+                for idx in range(5):
+                    phase = prog * (4.5 + idx * 0.4) + idx * 0.8
+                    radius = max(3, int(7 - prog * 3 + math.sin(phase) * 1.5))
+                    drift_x = int((rect.width * 0.25) * math.sin(phase * 1.3))
+                    rise = int(prog * rect.height * 0.35 + idx * 4)
+                    cy = base_y - rise
+                    cx = center_x + drift_x
+                    cx = max(radius, min(rect.width - radius, cx))
+                    cy = max(radius, min(rect.height - radius, cy))
+                    color_outer = (70, 230, 150, max(40, int(160 * (1.0 - prog))))
+                    color_inner = (60, 180, 130, max(30, int(140 * (1.0 - prog))))
+                    pygame.draw.circle(bubble, color_outer, (cx, cy), radius, 2)
+                    if radius > 2:
+                        pygame.draw.circle(bubble, color_inner, (cx, cy), max(1, radius - 2), 1)
+                haze_height = max(4, int(rect.height * 0.4 * (1.0 - prog)))
+                haze_rect = pygame.Rect(0, 0, rect.width, haze_height)
+                haze_rect.midbottom = (rect.width // 2, rect.height)
+                pygame.draw.rect(bubble, (40, 200, 120, max(20, int(90 * (1.0 - prog)))), haze_rect)
+                view.blit(bubble, rect.topleft, special_flags=pygame.BLEND_ADD)
+
         def render_purple_burst(rect: Optional[pygame.Rect], prog: float, scale: float = 1.0, color: Tuple[int, int, int] = (190, 120, 255)):
             if not rect:
                 return
@@ -7200,6 +7252,46 @@ class Game:
                                 pygame.draw.circle(trail, (64, 200, 100, alpha), (int(tx), int(ty)), r_k)
                             # Main circle outline
                             pygame.draw.circle(trail, GREEN, (int(cx), int(cy)), 10, 2)
+                        view.blit(trail, (0, 0))
+            elif act.get('type') == 'kobold_poison_dart' and act.get('actor_side') == 'enemy':
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 1:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = 0.0
+                    if dur > 0:
+                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    ai = act.get('actor_index')
+                    ti = act.get('target_index')
+                    src_rect = enemy_rects.get(ai)
+                    dst_rect = party_rects.get(ti)
+                    if src_rect and dst_rect:
+                        sx, sy = src_rect.centerx, src_rect.bottom
+                        ex, ey = dst_rect.centerx, dst_rect.top + 6
+                        # accelerate quickly toward target
+                        pe = max(0.0, min(1.0, p * p * p * 1.4))
+                        pe = min(1.0, pe)
+                        cx = sx + (ex - sx) * pe
+                        cy = sy + (ey - sy) * pe
+                        trail = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                        for k in range(1, 5):
+                            tk = p - k * 0.08
+                            if tk <= 0:
+                                continue
+                            tke = max(0.0, min(1.0, tk * tk * tk))
+                            tx = sx + (ex - sx) * tke
+                            ty = sy + (ey - sy) * tke
+                            radius = max(2, int(6 * (0.75 ** k)))
+                            alpha = max(30, 130 - k * 20)
+                            pygame.draw.circle(trail, (70, 220, 140, alpha), (int(tx), int(ty)), radius)
+                        main_color = (90, 255, 160)
+                        pygame.draw.circle(trail, main_color, (int(cx), int(cy)), 6)
+                        # dart tip line for direction
+                        tail_x = sx + (ex - sx) * max(0.0, pe - 0.12)
+                        tail_y = sy + (ey - sy) * max(0.0, pe - 0.12)
+                        pygame.draw.line(trail, main_color, (int(tail_x), int(tail_y)), (int(cx), int(cy)), 2)
                         view.blit(trail, (0, 0))
             # Goblin Chief throw: spin the goblin window towards the party target (Spark-like speed)
             elif act.get('type') == 'goblin_throw' and act.get('actor_side') == 'enemy':
