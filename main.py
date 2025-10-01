@@ -1862,6 +1862,21 @@ class Battle:
                 return {'type': 'kobold_poison_dart', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
                         'label': f"{e.name} fires a poison dart at {t.name}!"}
+        if mid == 'bat':
+            if random.random() < 0.5:
+                hit = random.random() < 0.65
+                dmg = random.randint(e.atk_low, e.atk_high)
+                return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
+                        'target_side': 'party', 'target_index': gi,
+                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} claws at {t.name}",
+                        'miss_label': f"{e.name} misses {t.name}."}
+            hit = random.random() < 0.6
+            dmg = random.randint(max(1, e.atk_low - 1), max(e.atk_low, e.atk_high))
+            return {'type': 'suck_blood', 'actor_side': 'enemy', 'actor_index': ix,
+                    'target_side': 'party', 'target_index': gi,
+                    'hit': hit, 'dmg': dmg,
+                    'label': f"{e.name} latches onto {t.name} and drinks deeply!",
+                    'miss_label': f"{t.name} shrugs off the bite!"}
         if mid == 'skeleton':
             r = random.random()
             if r < 0.7:
@@ -2203,6 +2218,8 @@ class Battle:
             self.anim['dur'] = [260, 220, 260, 200]
         if action.get('type') in ('bone_pile_wait', 'bone_pile_reform'):
             self.anim['dur'] = [200, 160, 200, 140]
+        if action.get('type') == 'suck_blood' and action.get('hit'):
+            self.anim['dur'] = [220, 240, 220, 160]
         # Goblin chief custom timings
         if action.get('type') == 'goblin_devour':
             # Move to goblin, eat, return
@@ -2453,6 +2470,42 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(act.get('miss_label', 'The attack misses.'))
+        elif act['type'] == 'suck_blood':
+            ai = act.get('actor_index', -1)
+            gi = act.get('target_index', -1)
+            hit = bool(act.get('hit'))
+            dmg = max(0, int(act.get('dmg', 0)))
+            if hit and 0 <= gi < len(self.party.members):
+                target = self.party.members[gi]
+                if gi in self.party_defending:
+                    dmg = max(1, int(math.ceil(dmg * 0.5)))
+                if self._status_get('party', gi, 'vulnerable') > 0:
+                    dmg = max(1, int(math.ceil(dmg * 1.5)))
+                target.hp = max(0, target.hp - dmg)
+                try:
+                    self.sfx.play('party_hurt', 0.7)
+                except Exception:
+                    pass
+                self.effects.trigger('party', gi, 420, 9, RED)
+                self.add_floater('party', gi, str(dmg), 800, WHITE)
+                if target.hp <= 0:
+                    target.hp = 0
+                    target.alive = False
+                    self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                if 0 <= ai < len(self.enemies):
+                    leech = self.enemies[ai]
+                    before = leech.hp
+                    leech.hp = min(leech.max_hp, leech.hp + dmg)
+                    healed = max(0, leech.hp - before)
+                    if healed > 0:
+                        self.add_floater('enemy', ai, f"+{healed}", 700, YELLOW)
+                        try:
+                            self.sfx.play('heal', 0.5)
+                        except Exception:
+                            pass
+                self.log.add(act.get('label', f"{self.enemies[ai].name} drains {target.name}!"))
+            else:
+                self.log.add(act.get('miss_label', f"{self.enemies[ai].name} fails to draw any blood."))
         elif act['type'] == 'censor_silence':
             ai = act.get('actor_index', -1)
             self.censor_silence_done.add(ai)
@@ -7465,6 +7518,41 @@ class Game:
                         tail_x = sx + (ex - sx) * max(0.0, pe - 0.12)
                         tail_y = sy + (ey - sy) * max(0.0, pe - 0.12)
                         pygame.draw.line(trail, main_color, (int(tail_x), int(tail_y)), (int(cx), int(cy)), 2)
+                        view.blit(trail, (0, 0))
+            elif act.get('type') == 'suck_blood' and act.get('hit'):
+                stage = b.anim.get('stage', 0)
+                durs = b.anim.get('dur', [0, 0, 0, 0])
+                if len(durs) >= 4 and stage == 1:
+                    now = pygame.time.get_ticks()
+                    t0 = b.anim.get('t0', now)
+                    dur = durs[stage] if stage < len(durs) else 1
+                    p = 0.0
+                    if dur > 0:
+                        p = max(0.0, min(1.0, (now - t0) / float(dur)))
+                    ai = act.get('actor_index')
+                    ti = act.get('target_index')
+                    src_rect = party_rects.get(ti)
+                    dst_rect = enemy_rects.get(ai)
+                    if src_rect and dst_rect:
+                        sx, sy = src_rect.centerx, src_rect.centery
+                        ex, ey = dst_rect.centerx, dst_rect.centery
+                        pe = max(0.0, min(1.0, p * p * 1.6))
+                        cx = sx + (ex - sx) * pe
+                        cy = sy + (ey - sy) * pe
+                        trail = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+                        for k in range(1, 6):
+                            tk = p - k * 0.08
+                            if tk <= 0:
+                                continue
+                            tke = max(0.0, min(1.0, tk * tk))
+                            tx = sx + (ex - sx) * tke
+                            ty = sy + (ey - sy) * tke
+                            radius = max(3, int(9 * (0.78 ** k)))
+                            alpha = max(40, 150 - k * 18)
+                            pygame.draw.circle(trail, (200, 40, 60, alpha), (int(tx), int(ty)), radius, 2)
+                        pulse = int(4 + 3 * math.sin(now / 80.0))
+                        pygame.draw.circle(trail, (220, 60, 80), (int(cx), int(cy)), 8 + pulse, 2)
+                        pygame.draw.circle(trail, (255, 90, 110), (int(cx), int(cy)), max(3, 5 + pulse // 2))
                         view.blit(trail, (0, 0))
             # Goblin Chief throw: spin the goblin window towards the party target (Spark-like speed)
             elif act.get('type') == 'goblin_throw' and act.get('actor_side') == 'enemy':
