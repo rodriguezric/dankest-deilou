@@ -2218,7 +2218,7 @@ class Battle:
             self.anim['dur'] = [260, 220, 260, 200]
         if action.get('type') in ('bone_pile_wait', 'bone_pile_reform'):
             self.anim['dur'] = [200, 160, 200, 140]
-        if action.get('type') == 'suck_blood':
+        if action.get('type') == 'suck_blood' and action.get('hit'):
             self.anim['dur'] = [220, 240, 220, 160]
         # Goblin chief custom timings
         if action.get('type') == 'goblin_devour':
@@ -2486,7 +2486,7 @@ class Battle:
                     self.sfx.play('party_hurt', 0.7)
                 except Exception:
                     pass
-                self.effects.trigger('party', gi, 300, 7)
+                self.effects.trigger('party', gi, 420, 9, RED)
                 self.add_floater('party', gi, str(dmg), 800, WHITE)
                 if target.hp <= 0:
                     target.hp = 0
@@ -7519,7 +7519,7 @@ class Game:
                         tail_y = sy + (ey - sy) * max(0.0, pe - 0.12)
                         pygame.draw.line(trail, main_color, (int(tail_x), int(tail_y)), (int(cx), int(cy)), 2)
                         view.blit(trail, (0, 0))
-            elif act.get('type') == 'suck_blood':
+            elif act.get('type') == 'suck_blood' and act.get('hit'):
                 stage = b.anim.get('stage', 0)
                 durs = b.anim.get('dur', [0, 0, 0, 0])
                 if len(durs) >= 4 and stage == 1:
