@@ -2,7 +2,9 @@
 """Utility script to spin up a battle with preset parties for quick testing."""
 
 import argparse
+import json
 import random
+from pathlib import Path
 from typing import List
 
 import pygame
@@ -16,6 +18,38 @@ CLASS_ALIASES = {
     "priest": "Priest",
     "rogue": "Rogue",
 }
+
+try:
+    import argcomplete
+except ImportError:  # pragma: no cover - optional dependency
+    argcomplete = None
+
+
+def _load_monster_ids() -> List[str]:
+    try:
+        monsters_path = Path("data/monsters.json")
+        data = json.loads(monsters_path.read_text())
+        return sorted({m.get("id", "") for m in data if m.get("id")})
+    except Exception:
+        return []
+
+
+def _comma_completer(choices: List[str]):
+    def _complete(prefix: str, parsed_args, **_kwargs):
+        base = ""
+        token = prefix
+        if "," in prefix:
+            base, token = prefix.rsplit(",", 1)
+            base += ","
+        token = token.lower()
+        matches = []
+        for choice in choices:
+            low = choice.lower()
+            if low.startswith(token):
+                matches.append(f"{base}{choice}")
+        return matches
+
+    return _complete
 
 
 def parse_class_list(raw: str) -> List[str]:
@@ -60,12 +94,12 @@ def build_enemies(game: "main.Game", enemy_ids: List[str], floor: int) -> List[m
 
 def main_entry() -> None:
     parser = argparse.ArgumentParser(description="Launch a battle scene with canned parties.")
-    parser.add_argument(
+    party_arg = parser.add_argument(
         "--party",
         default="Fighter,Rogue,Priest,Mage",
         help="Comma-separated party classes (Fighter,Rogue,Priest,Mage).",
     )
-    parser.add_argument(
+    enemies_arg = parser.add_argument(
         "--enemies",
         required=True,
         help="Comma-separated monster ids drawn from data/monsters.json (e.g., kobold,goblin)",
@@ -77,6 +111,13 @@ def main_entry() -> None:
         action="store_true",
         help="Play the combat intro flashes instead of jumping straight into battle.",
     )
+    if argcomplete:
+        class_choices = sorted(set(list(CLASS_ALIASES.keys()) + list(CLASS_ALIASES.values())))
+        monster_choices = _load_monster_ids()
+        party_arg.completer = _comma_completer(class_choices)
+        enemies_arg.completer = _comma_completer(monster_choices)
+        argcomplete.autocomplete(parser)
+
     args = parser.parse_args()
 
     if args.seed is not None:

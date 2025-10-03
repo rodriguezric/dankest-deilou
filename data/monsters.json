@@ -7,7 +7,10 @@
     "gold_low": 0,
     "gold_high": 0,
     "drops": [
-      { "iid": "cheese", "chance": 0.3 }
+      {
+        "iid": "cheese",
+        "chance": 0.3
+      }
     ]
   },
   {
@@ -16,7 +19,13 @@
     "archetype": "skirmisher",
     "tier": "mob",
     "gold_low": 2,
-    "gold_high": 12
+    "gold_high": 12,
+    "drops": [
+      {
+        "iid": "raiders_charm",
+        "chance": 0.08
+      }
+    ]
   },
   {
     "id": "skeleton",
@@ -24,7 +33,13 @@
     "archetype": "bruiser",
     "tier": "mob",
     "gold_low": 4,
-    "gold_high": 18
+    "gold_high": 18,
+    "drops": [
+      {
+        "iid": "ossuary_pauldron",
+        "chance": 0.07
+      }
+    ]
   },
   {
     "id": "bone_pile",
@@ -32,7 +47,13 @@
     "archetype": "acolyte",
     "tier": "mob",
     "gold_low": 0,
-    "gold_high": 0
+    "gold_high": 0,
+    "drops": [
+      {
+        "iid": "powdered_remains",
+        "chance": 0.05
+      }
+    ]
   },
   {
     "id": "bat",
@@ -40,7 +61,13 @@
     "archetype": "skirmisher",
     "tier": "mob",
     "gold_low": 1,
-    "gold_high": 6
+    "gold_high": 6,
+    "drops": [
+      {
+        "iid": "scarlet_phial",
+        "chance": 0.08
+      }
+    ]
   },
   {
     "id": "skink",
@@ -48,7 +75,13 @@
     "archetype": "skirmisher",
     "tier": "mob",
     "gold_low": 1,
-    "gold_high": 7
+    "gold_high": 7,
+    "drops": [
+      {
+        "iid": "skink_scale_cloak",
+        "chance": 0.08
+      }
+    ]
   },
   {
     "id": "ghost",
@@ -56,7 +89,13 @@
     "archetype": "acolyte",
     "tier": "mob",
     "gold_low": 2,
-    "gold_high": 12
+    "gold_high": 12,
+    "drops": [
+      {
+        "iid": "spirit_lantern",
+        "chance": 0.07
+      }
+    ]
   },
   {
     "id": "troll",
@@ -64,7 +103,13 @@
     "archetype": "bruiser",
     "tier": "mob",
     "gold_low": 6,
-    "gold_high": 20
+    "gold_high": 20,
+    "drops": [
+      {
+        "iid": "troll_hearty_stew",
+        "chance": 0.07
+      }
+    ]
   },
   {
     "id": "imp",
@@ -72,7 +117,13 @@
     "archetype": "adept",
     "tier": "mob",
     "gold_low": 3,
-    "gold_high": 14
+    "gold_high": 14,
+    "drops": [
+      {
+        "iid": "cinder_fetish",
+        "chance": 0.07
+      }
+    ]
   },
   {
     "id": "phantom",
@@ -80,7 +131,13 @@
     "archetype": "mage",
     "tier": "mob",
     "gold_low": 4,
-    "gold_high": 16
+    "gold_high": 16,
+    "drops": [
+      {
+        "iid": "veilstone_ring",
+        "chance": 0.06
+      }
+    ]
   },
   {
     "id": "kobold",
@@ -88,7 +145,13 @@
     "archetype": "skirmisher",
     "tier": "mob",
     "gold_low": 2,
-    "gold_high": 10
+    "gold_high": 10,
+    "drops": [
+      {
+        "iid": "kobold_trick_pouch",
+        "chance": 0.08
+      }
+    ]
   },
   {
     "id": "slime",
@@ -98,34 +161,52 @@
     "gold_low": 0,
     "gold_high": 0,
     "drops": [
-      { "iid": "droplet", "chance": 0.1 }
+      {
+        "iid": "droplet",
+        "chance": 0.1
+      }
     ]
-  }
-  ,
+  },
   {
     "id": "goblin_chief",
     "name": "Goblin Chief",
     "archetype": "skirmisher",
     "tier": "elite",
     "gold_low": 8,
-    "gold_high": 22
-  }
-  ,
+    "gold_high": 22,
+    "drops": [
+      {
+        "iid": "clan_warhorn",
+        "chance": 1
+      }
+    ]
+  },
   {
     "id": "slime_mind",
     "name": "Slime Mind",
     "archetype": "acolyte",
     "tier": "elite",
     "gold_low": 10,
-    "gold_high": 30
-  }
-  ,
+    "gold_high": 30,
+    "drops": [
+      {
+        "iid": "psionic_gel",
+        "chance": 1
+      }
+    ]
+  },
   {
     "id": "the_censor",
     "name": "The Censor",
     "archetype": "adept",
     "tier": "elite",
     "gold_low": 12,
-    "gold_high": 36
+    "gold_high": 36,
+    "drops": [
+      {
+        "iid": "censors_seal",
+        "chance": 1
+      }
+    ]
   }
 ]

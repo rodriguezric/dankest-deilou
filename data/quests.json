@@ -3,6 +3,123 @@
     "id": "slime_research",
     "name": "Slime Research",
     "desc": "A scientist in town is researching slimes and needs a Droplet to complete his analysis.",
-    "complete_text": "With your Droplet, the scientist completes his research!"
+    "complete_text": "With your Droplet, the scientist completes his research!",
+    "required_item": "droplet",
+    "reward_gold": 60,
+    "reward_item": "serum"
+  },
+  {
+    "id": "quest_raiders_charm",
+    "name": "Decode the Charm",
+    "desc": "Sira the Fence wants a Raider's Charm to decipher goblin raiding routes.",
+    "complete_text": "Sira traces the etchings and grins. The raider routes are revealed!",
+    "required_item": "raiders_charm",
+    "reward_gold": 80,
+    "reward_item": "potion_small"
+  },
+  {
+    "id": "quest_ossuary_pauldron",
+    "name": "Consecrate the Ossuary",
+    "desc": "Vicar Ren asks for an Ossuary Pauldron recovered from skeleton guardians.",
+    "complete_text": "Ren intones a prayer and sanctifies the bonework, freeing the restless spirit.",
+    "required_item": "ossuary_pauldron",
+    "reward_gold": 100
+  },
+  {
+    "id": "quest_powdered_remains",
+    "name": "Alchemical Bone Meal",
+    "desc": "Vyra needs Powdered Remains to refine a potent concoction.",
+    "complete_text": "Vyra claps in delight and begins infusing the powder into her tonics.",
+    "required_item": "powdered_remains",
+    "reward_gold": 70,
+    "reward_item": "droplet"
+  },
+  {
+    "id": "quest_scarlet_phial",
+    "name": "Scarlet Remedy",
+    "desc": "Lute the Apothecary requests a Scarlet Phial harvested from cave bats.",
+    "complete_text": "Lute seals the phial away, eager to distill a powerful coagulant.",
+    "required_item": "scarlet_phial",
+    "reward_gold": 75,
+    "reward_item": "potion_small"
+  },
+  {
+    "id": "quest_skink_cloak",
+    "name": "Marsh Camouflage",
+    "desc": "Kai the Pathfinder needs a Skink Scale Cloak to resume scouting the marsh.",
+    "complete_text": "Kai bows gratefully and disappears back into the reeds.",
+    "required_item": "skink_scale_cloak",
+    "reward_gold": 85,
+    "reward_item": "boots"
+  },
+  {
+    "id": "quest_spirit_lantern",
+    "name": "Lantern for the Lost",
+    "desc": "Exorcist Iona needs a Spirit Lantern to soothe the chapel spirits.",
+    "complete_text": "Iona nods, lantern in hand, and sets about calming the restless dead.",
+    "required_item": "spirit_lantern",
+    "reward_gold": 110,
+    "reward_item": "serum"
+  },
+  {
+    "id": "quest_troll_stew",
+    "name": "Feed the Militia",
+    "desc": "Cook Brum needs Troll Hearty Stew to boost the militia\u2019s strength.",
+    "complete_text": "Brum ladles the stew into kettles, whistling a victorious tune.",
+    "required_item": "troll_hearty_stew",
+    "reward_gold": 120,
+    "reward_item": "potion_small"
+  },
+  {
+    "id": "quest_cinder_fetish",
+    "name": "Infernal Study",
+    "desc": "Pyromancer Lua seeks a Cinder Fetish taken from imps.",
+    "complete_text": "Lua sketches the runes eagerly, weaving them into a new ward.",
+    "required_item": "cinder_fetish",
+    "reward_gold": 130,
+    "reward_item": "droplet"
+  },
+  {
+    "id": "quest_veilstone_ring",
+    "name": "Shadowed Paths",
+    "desc": "The Shadow Cartographer needs a Veilstone Ring from phantoms.",
+    "complete_text": "With the ring, the cartographer sketches new secret routes for the town.",
+    "required_item": "veilstone_ring",
+    "reward_gold": 130
+  },
+  {
+    "id": "quest_trick_pouch",
+    "name": "Counter the Kobolds",
+    "desc": "Denn the Trapper wants a Kobold Trick Pouch to improve his defenses.",
+    "complete_text": "Denn grins and scatters the reagents into new snares for the town.",
+    "required_item": "kobold_trick_pouch",
+    "reward_gold": 90,
+    "reward_item": "boots"
+  },
+  {
+    "id": "quest_clan_warhorn",
+    "name": "Break the Warhorn",
+    "desc": "Captain Lura needs a Clan Warhorn to decipher goblin battle calls.",
+    "complete_text": "Lura studies the horn and rewrites the militia\u2019s battle signals.",
+    "required_item": "clan_warhorn",
+    "reward_gold": 150
+  },
+  {
+    "id": "quest_psionic_gel",
+    "name": "Quiet the Mindsong",
+    "desc": "Mindseer Ava wants Psionic Gel to reinforce psychic wards.",
+    "complete_text": "Ava layers the gel over her runes, dampening the psychic noise.",
+    "required_item": "psionic_gel",
+    "reward_gold": 140,
+    "reward_item": "droplet"
+  },
+  {
+    "id": "quest_censors_seal",
+    "name": "Restore the Seal",
+    "desc": "Scribe Eden seeks the Censor\u2019s Seal to return it to the royal archives.",
+    "complete_text": "Eden presses the seal into wax, satisfied that justice has been recorded.",
+    "required_item": "censors_seal",
+    "reward_gold": 180,
+    "reward_item": "serum"
   }
 ]
