@@ -2261,6 +2261,10 @@ class Battle:
         it = self.items_by_id.get(iid)
         if not it or it.get('type') != 'consumable':
             return None
+        if it.get('trait_select'):
+            name = it.get('name', 'The tome')
+            self.log.add(f"No time to study {name.lower()} in the middle of battle!")
+            return None
         # Consumables can restore HP and/or MP. Prefer MP if present, else HP.
         if ('mp' in it) or ('mp_low' in it) or ('mp_high' in it):
             low = int(it.get('mp_low', it.get('mp', 0)))
@@ -5488,22 +5492,33 @@ class Game:
                 choice = self.dialog_menu_index
                 if choice == 0:  # Talk
                     npc = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {})
-                    # Scientist quest hook
-                    if str(self.dialog_npc_id) == 'scientist':
-                        qid = 'slime_research'
+                    qid = str(npc.get('quest_id', ''))
+                    if qid:
                         st = self.quests_state.get(qid, 'not_started')
                         if st == 'not_started':
                             self.quests_state[qid] = 'active'
-                            intro = str(npc.get('talk_intro', "I'm researching slimes..."))
-                            self.dialog_text = [intro]
+                            payload = [str(npc.get('talk_intro', npc.get('desc', '...')))]
                         elif st == 'active':
-                            lines = npc.get('talk_active', ["..."])
-                            ln = random.choice(lines) if isinstance(lines, list) and lines else "..."
-                            self.dialog_text = [str(ln)]
-                        else:  # completed
-                            lines = npc.get('talk_complete', ["Thank you again."])
-                            ln = random.choice(lines) if isinstance(lines, list) and lines else "Thank you again."
-                            self.dialog_text = [str(ln)]
+                            lines = npc.get('talk_active', [])
+                            if isinstance(lines, list) and lines:
+                                pick = random.choice(lines)
+                                if isinstance(pick, list):
+                                    payload = [str(x) for x in pick]
+                                else:
+                                    payload = [str(pick)]
+                            else:
+                                payload = [str(npc.get('talk_intro', npc.get('desc', '...')))]
+                        else:
+                            lines = npc.get('talk_complete', [])
+                            if isinstance(lines, list) and lines:
+                                pick = random.choice(lines)
+                                if isinstance(pick, list):
+                                    payload = [str(x) for x in pick]
+                                else:
+                                    payload = [str(pick)]
+                            else:
+                                payload = [str(npc.get('talk_complete', "Thank you again."))]
+                        self.dialog_text = payload
                     else:
                         # 'talk' supports either a single string, or a list where each entry is
                         # either a string (single-line) or a list of strings (multi-line).
@@ -5554,23 +5569,44 @@ class Game:
                     # NPC-specific reactions
                     resp = "They don't seem interested."
                     handled = False
-                    if str(self.dialog_npc_id) == 'scientist':
-                        qid = 'slime_research'
+                    npc = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {})
+                    qid = str(npc.get('quest_id', ''))
+                    if qid:
                         st = self.quests_state.get(qid, 'not_started')
-                        if st == 'active' and iid == 'droplet':
-                            # consume droplet and reward
-                            try:
-                                self.party.inventory.remove('droplet')
-                            except ValueError:
-                                pass
-                            self.party.inventory.append('serum')
+                        quest = (self.quests_data.get(qid) or {})
+                        required_item = str(quest.get('required_item', npc.get('quest_item', '')) or '')
+                        if st == 'active' and required_item and iid == required_item:
+                            reward_gold = int(quest.get('reward_gold', 0) or 0)
+                            if reward_gold:
+                                try:
+                                    self.party.gold += reward_gold
+                                except Exception:
+                                    pass
+                            reward_item = quest.get('reward_item')
+                            if reward_item:
+                                if isinstance(reward_item, list):
+                                    for rid in reward_item:
+                                        if rid:
+                                            self.party.inventory.append(str(rid))
+                                else:
+                                    self.party.inventory.append(str(reward_item))
+                            resp = str(quest.get('complete_text', 'Quest complete!'))
                             self.quests_state[qid] = 'completed'
-                            resp = str((self.quests_data.get(qid) or {}).get('complete_text', 'Quest Complete!'))
                             handled = True
                         elif st == 'not_started':
-                            resp = "I'm not sure what to do with that yet."
-                        elif st == 'completed':
-                            resp = "Thank you again; my work continues."
+                            resp = str(npc.get('talk_intro', resp))
+                            handled = True
+                        elif st == 'completed' and required_item and iid == required_item:
+                            lines = npc.get('talk_complete', [])
+                            if isinstance(lines, list) and lines:
+                                pick = random.choice(lines)
+                                if isinstance(pick, list):
+                                    resp = " ".join(str(x) for x in pick)
+                                else:
+                                    resp = str(pick)
+                            else:
+                                resp = str(npc.get('talk_complete', resp))
+                            handled = True
                     if not handled:
                         # generic or rejection
                         pass
@@ -6163,6 +6199,21 @@ class Game:
             self.log.add("Nothing happens.")
             return
         if it.get('type') == 'consumable':
+            if it.get('trait_select'):
+                try:
+                    member_ix = self.party.members.index(target)
+                except ValueError:
+                    self.log.add("Nothing happens.")
+                    return
+                name = it.get('name', 'Trait Tome')
+                self.log.add(f"{target.name} studies the {name}.")
+                if hasattr(self, 'items_phase'):
+                    self.items_phase = 'items'
+                return_mode = MODE_ITEMS if self.mode == MODE_ITEMS else self.mode
+                if return_mode == MODE_BATTLE:
+                    return_mode = MODE_PARTY
+                self.start_trait_selection(member_ix, return_mode=return_mode)
+                return
             name = it.get('name', 'Item')
             lower = name.lower()
             # HP heal

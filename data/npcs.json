@@ -6,11 +6,10 @@
     "desc": "A weary traveler in a tattered cloak. His eyes know these halls.",
     "talk": [
       "Beware the Labyrinth. Even simple foes can overwhelm the unprepared.",
-      "Keep your healer close and watch your footing—stuns and blinds can end a run.",
-      "When your party grows stronger than a floor, you can move freely—but do not grow complacent."
+      "Keep your healer close and watch your footing\u2014stuns and blinds can end a run.",
+      "When your party grows stronger than a floor, you can move freely\u2014but do not grow complacent."
     ]
-  }
-  ,
+  },
   {
     "id": "scientist",
     "name": "Scientist",
@@ -24,7 +23,229 @@
     ],
     "talk_complete": [
       "Fascinating! Slime composition can refresh one's mana reserves.",
-      "Your help proved the theory — slime essence boosts arcane flow."
-    ]
+      "Your help proved the theory \u2014 slime essence boosts arcane flow."
+    ],
+    "quest_id": "slime_research"
+  },
+  {
+    "id": "npc_sira_fence",
+    "name": "Sira the Fence",
+    "voice": "human_man",
+    "desc": "A keen-eyed fixer who catalogues every goblin trinket that crosses her desk.",
+    "talk_intro": "Bring me a Raider's Charm from a goblin. I need a fresh sample to decode their markings.",
+    "talk_active": [
+      "Goblins etch routes into those charms. I just need a clear look.",
+      "No counterfeits, mind you. Only a charm pulled from a raider will do.",
+      "Every charm hums with stories of raids. I plan to turn those stories into maps."
+    ],
+    "talk_complete": [
+      "Your charm unlocked half a dozen hideouts. Clever work.",
+      "Thanks to you, caravans will know which roads to avoid."
+    ],
+    "quest_id": "quest_raiders_charm"
+  },
+  {
+    "id": "npc_vicar_ren",
+    "name": "Vicar Ren",
+    "voice": "human_man",
+    "desc": "A solemn cleric cataloguing relics of the fallen.",
+    "talk_intro": "If you uncover an intact Ossuary Pauldron, bring it here. I will consecrate it properly.",
+    "talk_active": [
+      "The pauldrons protect more than flesh\u2014they bind lingering spirits.",
+      "Only a warrior who fell recently will still have a pristine pauldron.",
+      "Lay the relic on the altar when you find it. I will do the rest."
+    ],
+    "talk_complete": [
+      "The spirits rest easier thanks to you.",
+      "I have recorded the fallen knight's name. They will not be forgotten."
+    ],
+    "quest_id": "quest_ossuary_pauldron"
+  },
+  {
+    "id": "npc_alchemist_vyra",
+    "name": "Vyra the Alchemist",
+    "voice": "human_man",
+    "desc": "A meticulous alchemist with a keen nose for rare reagents.",
+    "talk_intro": "Bring me Powdered Remains from the bone piles. I promise a fine tonic for your trouble.",
+    "talk_active": [
+      "Keep the powder dry. Moisture ruins the lattice.",
+      "Bone piles reform quickly\u2014scoop the powder before it stirs again.",
+      "I can distill remarkable tonics from that dust."
+    ],
+    "talk_complete": [
+      "Excellent quality! Your timing was perfect.",
+      "I'll brew something special with this batch. Come back later."
+    ],
+    "quest_id": "quest_powdered_remains"
+  },
+  {
+    "id": "npc_blood_apothecary",
+    "name": "Lute the Apothecary",
+    "voice": "human_man",
+    "desc": "An apothecary fascinated by nocturnal remedies.",
+    "talk_intro": "Bring me a Scarlet Phial. Bat ichor refines into unrivaled coagulants.",
+    "talk_active": [
+      "Fresh phials shimmer under moonlight.",
+      "Mind the fangs\u2014bats do not surrender their ichor easily.",
+      "A single phial could save a dozen soldiers."
+    ],
+    "talk_complete": [
+      "Perfect viscosity! This will anchor a lifesaving draught.",
+      "You have quite the steady hand."
+    ],
+    "quest_id": "quest_scarlet_phial"
+  },
+  {
+    "id": "npc_pathfinder_kai",
+    "name": "Kai the Pathfinder",
+    "voice": "human_man",
+    "desc": "A scout who charts safe passages through the wetlands.",
+    "talk_intro": "If you can bring me a Skink Scale Cloak, I can blend into the marsh again.",
+    "talk_active": [
+      "Each scale sheds water and mud alike.",
+      "Catch the skink before it darts\u2014speed is their armor.",
+      "My old cloak rotted away. I need a fresh weave."
+    ],
+    "talk_complete": [
+      "Ah, it fits like a second skin!",
+      "With this cloak, my maps will be twice as accurate."
+    ],
+    "quest_id": "quest_skink_cloak"
+  },
+  {
+    "id": "npc_exorcist_iona",
+    "name": "Exorcist Iona",
+    "voice": "human_man",
+    "desc": "A stern exorcist cataloguing spectral phenomena.",
+    "talk_intro": "Bring me a Spirit Lantern. With it I can calm the spirits haunting the chapel.",
+    "talk_active": [
+      "Ghost-light flickers out if you stare too long.",
+      "Bind the lantern with silver thread before it fades.",
+      "Restless spirits swirl near the crypt stairs."
+    ],
+    "talk_complete": [
+      "The chapel will sleep peacefully tonight.",
+      "Your bravery kept the specters from growing bold."
+    ],
+    "quest_id": "quest_spirit_lantern"
+  },
+  {
+    "id": "npc_cook_brum",
+    "name": "Cook Brum",
+    "voice": "human_man",
+    "desc": "A burly cook preparing rations for the town militia.",
+    "talk_intro": "Fetch me Troll Hearty Stew. The militia needs strength in a bowl.",
+    "talk_active": [
+      "Troll marrow keeps the stew simmering for days.",
+      "I can stretch one cauldron to feed a platoon.",
+      "Watch for the troll\u2019s club while you skim the pot!"
+    ],
+    "talk_complete": [
+      "Ha! That\u2019s the good stuff. The recruits will march for hours.",
+      "You\u2019ve earned a seat at my fire any time."
+    ],
+    "quest_id": "quest_troll_stew"
+  },
+  {
+    "id": "npc_pyromancer_lua",
+    "name": "Pyromancer Lua",
+    "voice": "human_man",
+    "desc": "A firebrand scholar obsessed with infernal runes.",
+    "talk_intro": "Bring me a Cinder Fetish\u2014its runes could refine my flame wards.",
+    "talk_active": [
+      "Imps etch safeguards against their own sparks.",
+      "Don\u2019t douse the fetish; the embers need to stay awake.",
+      "With that fetish I could weave a safer firewall."
+    ],
+    "talk_complete": [
+      "Marvelous! These runes will bolster the town\u2019s wards.",
+      "When the fires hold back the darkness, remember your part in it."
+    ],
+    "quest_id": "quest_cinder_fetish"
+  },
+  {
+    "id": "npc_shadow_cartographer",
+    "name": "The Shadow Cartographer",
+    "voice": "human_man",
+    "desc": "A hooded mapper who charts the folds between light and dark.",
+    "talk_intro": "Secure a Veilstone Ring for me. It reveals hidden paths in the dusk.",
+    "talk_active": [
+      "Phantoms keep their rings close\u2014wait for them to falter.",
+      "Veilstone resonates with the whispers between worlds.",
+      "I map the in-between. The ring is my compass."
+    ],
+    "talk_complete": [
+      "The map grows clearer already.",
+      "You\u2019ve earned safe passage through the shadowed lanes."
+    ],
+    "quest_id": "quest_veilstone_ring"
+  },
+  {
+    "id": "npc_trapper_denn",
+    "name": "Denn the Trapper",
+    "voice": "human_man",
+    "desc": "A trapwright who studies kobold ambush craft.",
+    "talk_intro": "Snag a Kobold Trick Pouch for me. I want to dismantle their tricks.",
+    "talk_active": [
+      "Kobolds stash a dozen surprises in each pouch.",
+      "Mind the tripwires before you grab it.",
+      "I can rig counter-traps once I see what they carry."
+    ],
+    "talk_complete": [
+      "These powders will turn their tricks back on them.",
+      "You saved a lot of ankles today."
+    ],
+    "quest_id": "quest_trick_pouch"
+  },
+  {
+    "id": "npc_captain_lura",
+    "name": "Captain Lura",
+    "voice": "human_man",
+    "desc": "The militia captain planning the next counteroffensive.",
+    "talk_intro": "Capture a Clan Warhorn for me. I want to learn the goblin signals.",
+    "talk_active": [
+      "The chief never lets the horn out of reach.",
+      "Every note from that horn can call a flank.",
+      "Seize it intact\u2014I need to study the mouthpiece."
+    ],
+    "talk_complete": [
+      "Excellent. Now we know how to scatter their ranks.",
+      "Your bravery will echo through our drills."
+    ],
+    "quest_id": "quest_clan_warhorn"
+  },
+  {
+    "id": "npc_mindseer_ava",
+    "name": "Mindseer Ava",
+    "voice": "human_man",
+    "desc": "A mystic tuning crystals to repel psychic influence.",
+    "talk_intro": "Bring me Psionic Gel from the Slime Mind. I can layer it onto our wards.",
+    "talk_active": [
+      "Focus your thoughts when you harvest it\u2014the gel clings to intent.",
+      "Keep it in a sealed vial or it will crawl away.",
+      "I can weave a mind-screen once I study the gel."
+    ],
+    "talk_complete": [
+      "The hum quiets already. Our minds will rest easier.",
+      "You have severed a tether the Slime Mind held on us."
+    ],
+    "quest_id": "quest_psionic_gel"
+  },
+  {
+    "id": "npc_scribe_eden",
+    "name": "Scribe Eden",
+    "voice": "human_man",
+    "desc": "The court scribe documenting decrees lost to the labyrinth.",
+    "talk_intro": "If you pry loose the Censor\u2019s Seal, bring it to me. History must reclaim it.",
+    "talk_active": [
+      "The seal binds words and wills alike.",
+      "Only a focused strike will break the Censor\u2019s grip.",
+      "That relic belongs to the archives, not the labyrinth."
+    ],
+    "talk_complete": [
+      "At last, the seal returns to the record halls.",
+      "Your deed restores a measure of justice to these ruins."
+    ],
+    "quest_id": "quest_censors_seal"
   }
 ]

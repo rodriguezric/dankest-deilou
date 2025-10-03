@@ -14,6 +14,14 @@
     "desc": "A potent tonic that permanently increases max MP by 3."
   },
   {
+    "id": "trait_tome",
+    "name": "Trait Tome",
+    "type": "consumable",
+    "trait_select": true,
+    "price": 200,
+    "desc": "A dusty manual that teaches a fresh personal trait."
+  },
+  {
     "id": "sword_basic",
     "name": "Sword",
     "type": "weapon",
@@ -311,7 +319,7 @@
       "class": "Fighter",
       "level": 5
     },
-    "hp": 4, 
+    "hp": 4,
     "desc": "Dense stone and iron forged for unyielding guardians."
   },
   {
@@ -520,5 +528,130 @@
       "level": 5
     },
     "desc": "A cloak woven of shadow, favoring deadly grace."
+  },
+  {
+    "id": "raiders_charm",
+    "name": "Raider's Charm",
+    "type": "accessory",
+    "atk": 1,
+    "agi": 1,
+    "price": 85,
+    "desc": "A charm braided from goblin trophies. It thrums with reckless energy."
+  },
+  {
+    "id": "ossuary_pauldron",
+    "name": "Ossuary Pauldron",
+    "type": "armor",
+    "ac": -2,
+    "price": 120,
+    "req": {
+      "class": [
+        "Fighter",
+        "Priest"
+      ],
+      "level": 2
+    },
+    "desc": "Interlocking bone plates that lend grim protection to stalwart defenders."
+  },
+  {
+    "id": "powdered_remains",
+    "name": "Powdered Remains",
+    "type": "consumable",
+    "heal_low": 12,
+    "heal_high": 12,
+    "price": 90,
+    "desc": "Bone meal that can be brewed into a restorative draught."
+  },
+  {
+    "id": "scarlet_phial",
+    "name": "Scarlet Phial",
+    "type": "consumable",
+    "heal_low": 6,
+    "heal_high": 6,
+    "price": 75,
+    "desc": "A vial of bat ichor that knits wounds when sipped."
+  },
+  {
+    "id": "skink_scale_cloak",
+    "name": "Skink Scale Cloak",
+    "type": "accessory",
+    "agi": 2,
+    "price": 95,
+    "desc": "A cloak stitched from skink scales, light as air and slick with dew."
+  },
+  {
+    "id": "spirit_lantern",
+    "name": "Spirit Lantern",
+    "type": "accessory",
+    "mp": 3,
+    "price": 140,
+    "desc": "A lantern that traps will-o-wisp light to guide lost souls."
+  },
+  {
+    "id": "troll_hearty_stew",
+    "name": "Troll Hearty Stew",
+    "type": "consumable",
+    "heal_low": 22,
+    "heal_high": 28,
+    "price": 150,
+    "desc": "A dense stew that channels troll resilience into whomever eats it."
+  },
+  {
+    "id": "cinder_fetish",
+    "name": "Cinder Fetish",
+    "type": "weapon",
+    "atk": 1,
+    "iq": 2,
+    "price": 150,
+    "req": {
+      "class": "Mage",
+      "level": 2
+    },
+    "desc": "A smoldering fetish that channels impish fire into focused spells."
+  },
+  {
+    "id": "veilstone_ring",
+    "name": "Veilstone Ring",
+    "type": "accessory",
+    "mp": 2,
+    "agi": 1,
+    "price": 135,
+    "desc": "A ring cut from veilstone that lets the wearer slip between shadows."
+  },
+  {
+    "id": "kobold_trick_pouch",
+    "name": "Kobold Trick Pouch",
+    "type": "consumable",
+    "mp_low": 2,
+    "mp_high": 3,
+    "price": 80,
+    "desc": "A pouch of glittering reagents that jolts the mind awake."
+  },
+  {
+    "id": "clan_warhorn",
+    "name": "Clan Warhorn",
+    "type": "accessory",
+    "atk": 2,
+    "vit": 1,
+    "price": 180,
+    "desc": "A resonant horn that rallies allies with goblin ferocity."
+  },
+  {
+    "id": "psionic_gel",
+    "name": "Psionic Gel",
+    "type": "consumable",
+    "mp_low": 4,
+    "mp_high": 4,
+    "price": 160,
+    "desc": "A quivering gel that hums with latent psionic energy."
+  },
+  {
+    "id": "censors_seal",
+    "name": "Censor's Seal",
+    "type": "accessory",
+    "mp": 3,
+    "pie": 2,
+    "price": 220,
+    "desc": "An adamant seal that once silenced courts; it now bolsters sacred rites."
   }
 ]
