@@ -1138,7 +1138,7 @@ class Renderer:
     def draw_center_menu(self, options: List[str], selected: int):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         if not options:
-            return
+            return pygame.Rect(0, 0, 0, 0)
         pad_x, pad_y = 12, 10
         text_w = max(self.font.size(s + "  ")[0] for s in options)
         text_h = self.font.get_height()
@@ -1155,6 +1155,7 @@ class Renderer:
             prefix = "> " if i == selected else "  "
             self.text(view, prefix + s, (x + pad_x, cy), color)
             cy += text_h
+        return rect
 
     # ---- Combat HUDs ----
     def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None, offsets: Dict[int, int] = None, offsets_x: Dict[int, int] = None) -> Dict[int, pygame.Rect]:
@@ -3289,6 +3290,7 @@ class Game:
         self.items_action_ix = 0
         self.items_target_ix = 0
         self.items_selected_iid: Optional[str] = None
+        self.items_scroll = 0
 
         # Equip UI state
         self.equip_phase = 'member'  # 'member' | 'slot' | 'choose'
@@ -3931,6 +3933,7 @@ class Game:
             self.return_mode = MODE_TOWN
             self.items_phase = 'items'
             self.items_item_ix = 0
+            self.items_scroll = 0
             self.mode = MODE_ITEMS
         elif ix == 9:
             # Quests screen
@@ -6049,6 +6052,7 @@ class Game:
                         self.return_mode = MODE_MAZE
                         self.items_phase = 'items'
                         self.items_item_ix = 0
+                        self.items_scroll = 0
                         self.mode = MODE_ITEMS
                     elif self.pause_index == 2:
                         self.equip_phase = 'member'
@@ -6072,6 +6076,35 @@ class Game:
                 elif event.key == pygame.K_ESCAPE:
                     self.mode = MODE_MAZE
 
+    def _build_condensed_inventory(self) -> Tuple[List[str], Dict[str, int]]:
+        ordered: List[str] = []
+        counts: Dict[str, int] = {}
+        for iid in self.party.inventory:
+            if iid not in counts:
+                counts[iid] = 1
+                ordered.append(iid)
+            else:
+                counts[iid] += 1
+        return ordered, counts
+
+    def _sync_items_scroll(self, total: int, window: int = 10) -> None:
+        if total <= 0:
+            self.items_scroll = 0
+            self.items_item_ix = 0
+            return
+        window = max(1, window)
+        max_scroll = max(0, total - window)
+        if self.items_scroll > max_scroll:
+            self.items_scroll = max_scroll
+        if self.items_item_ix < 0:
+            self.items_item_ix = 0
+        elif self.items_item_ix >= total:
+            self.items_item_ix = total - 1
+        if self.items_item_ix < self.items_scroll:
+            self.items_scroll = self.items_item_ix
+        elif self.items_item_ix >= self.items_scroll + window:
+            self.items_scroll = self.items_item_ix - window + 1
+
     def draw_items(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         view.fill((18, 18, 24))
@@ -6079,24 +6112,31 @@ class Game:
         self.r.text_big(view, "Party Items", (20, 16))
         # Centered menu interface for Items
         if self.items_phase == 'items':
-            # Build condensed inventory with quantities, preserving order of first appearance
-            ordered: List[str] = []
-            counts: Dict[str, int] = {}
-            for iid in self.party.inventory:
-                if iid not in counts:
-                    counts[iid] = 1
-                    ordered.append(iid)
-                else:
-                    counts[iid] += 1
+            ordered, counts = self._build_condensed_inventory()
             labels = []
             for iid in ordered:
                 name = ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid)
                 c = counts.get(iid, 1)
                 labels.append(f"{name} x{c}" if c > 1 else name)
             options = labels + ["Back"]
-            # Clamp index into range (ordered + Back)
-            self.items_item_ix = self.items_item_ix % max(1, len(ordered) + 1)
-            self.r.draw_center_menu(options, self.items_item_ix)
+            total = len(options) or 1
+            self.items_item_ix = self.items_item_ix % total
+            window = 10
+            self._sync_items_scroll(total, window)
+            start = self.items_scroll
+            end = min(start + window, total)
+            visible = options[start:end]
+            if not visible:
+                visible = options
+                start = 0
+                end = total
+                self.items_scroll = 0
+            selected_local = max(0, min(self.items_item_ix - start, len(visible) - 1))
+            menu_rect = self.r.draw_center_menu(visible, selected_local)
+            if self.items_scroll > 0:
+                self.r.text_small(view, '^', (menu_rect.centerx - 4, menu_rect.top - 14), color=YELLOW)
+            if end < total:
+                self.r.text_small(view, 'v', (menu_rect.centerx - 4, menu_rect.bottom + 4), color=YELLOW)
         elif self.items_phase == 'item_action':
             self.r.draw_center_menu(["Use", "Cancel"], self.items_action_ix)
         elif self.items_phase == 'use_target':
@@ -6108,20 +6148,19 @@ class Game:
         actives = self.party.active_members()
         if event.type == pygame.KEYDOWN:
             if self.items_phase == 'items':
-                # Condensed inventory for navigation
-                ordered: List[str] = []
-                counts: Dict[str, int] = {}
-                for iid in self.party.inventory:
-                    if iid not in counts:
-                        counts[iid] = 1
-                        ordered.append(iid)
-                    else:
-                        counts[iid] += 1
-                n = max(1, len(ordered) + 1)  # +1 for Back
+                ordered, _ = self._build_condensed_inventory()
+                n = len(ordered) + 1  # +1 for Back
+                if n <= 0:
+                    n = 1
+                window = 10
+                self.items_item_ix %= n
+                self._sync_items_scroll(n, window)
                 if event.key in (pygame.K_UP, pygame.K_k):
                     self.items_item_ix = (self.items_item_ix - 1) % n
+                    self._sync_items_scroll(n, window)
                 elif event.key in (pygame.K_DOWN, pygame.K_j):
                     self.items_item_ix = (self.items_item_ix + 1) % n
+                    self._sync_items_scroll(n, window)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     # If Back selected, return to previous mode
                     if self.items_item_ix == len(ordered):
@@ -6131,6 +6170,7 @@ class Game:
                         self.items_selected_iid = ordered[self.items_item_ix]
                         self.items_action_ix = 0
                         self.items_phase = 'item_action'
+                        self._sync_items_scroll(n, window)
                 elif event.key == pygame.K_ESCAPE:
                     # Return to the mode that opened Items (Town or Maze)
                     self.mode = self.return_mode
@@ -6185,10 +6225,12 @@ class Game:
                                 for j in self.party.inventory:
                                     if j not in seen:
                                         seen.add(j); ordered_after.append(j)
+                                total_after = len(ordered_after) + 1
                                 if ordered_after:
                                     self.items_item_ix = min(self.items_item_ix, len(ordered_after) - 1)
                                 else:
                                     self.items_item_ix = 0
+                                self._sync_items_scroll(total_after, 10)
                         self.items_phase = 'items'
                 elif event.key == pygame.K_ESCAPE:
                     self.items_phase = 'item_action'

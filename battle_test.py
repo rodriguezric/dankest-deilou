@@ -82,6 +82,18 @@ def build_party(game: "main.Game", class_names: List[str]) -> None:
     game.refresh_party_gear_bonuses()
 
 
+def stock_all_items(game: "main.Game") -> None:
+    """Fill the party inventory with one copy of every defined item."""
+    try:
+        items = getattr(game, "items_list", [])
+        ids = [it.get("id") for it in items if isinstance(it, dict) and it.get("id")]
+    except Exception:
+        ids = []
+    if not ids:
+        ids = list(getattr(game, "items_by_id", {}).keys())
+    game.party.inventory = list(ids)
+
+
 def build_enemies(game: "main.Game", enemy_ids: List[str], floor: int) -> List[main.Enemy]:
     enemies: List[main.Enemy] = []
     for mid in enemy_ids:
@@ -133,6 +145,7 @@ def main_entry() -> None:
 
     game = main.Game()
     build_party(game, classes)
+    stock_all_items(game)
     enemies = build_enemies(game, enemy_ids, floor)
 
     battle = main.Battle(game.party, game.log, game.effects, game.items_by_id, game.monsters_by_id, game.skills_config, game.sfx)
