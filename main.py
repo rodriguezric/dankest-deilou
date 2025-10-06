@@ -38,6 +38,7 @@ MUSIC_TOWN = "town.wav"
 MUSIC_LABYRINTH = "labyrinth.wav"
 MUSIC_BATTLE = "battle.wav"
 MUSIC_ELITE_BATTLE = "elite_battle.ogg"
+MUSIC_PROLOGUE = "violet_eerie_ambient.wav"
 
 MAZE_W, MAZE_H = 24, 24
 
@@ -53,6 +54,7 @@ PURPLE = (180, 120, 240)
 
 # Modes
 MODE_TITLE = "TITLE"
+MODE_PROLOGUE = "PROLOGUE"
 MODE_TOWN = "TOWN"
 MODE_CREATE = "CREATE"
 MODE_PARTY = "PARTY"
@@ -138,6 +140,7 @@ class MusicManager:
             'labyrinth': self._load_sound(MUSIC_LABYRINTH),
             'battle': self._load_sound(MUSIC_BATTLE),
             'elite_battle': self._load_sound(MUSIC_ELITE_BATTLE),
+            'prologue': self._load_sound(MUSIC_PROLOGUE),
         }
         # Two channels for crossfading
         try:
@@ -3366,6 +3369,24 @@ class Game:
         self.load_feedback_stage: int = 0  # 0 fade-out, 1 fade-in
         self.load_feedback_t0: int = 0
 
+        # Prologue scene state
+        self.prologue_lines: List[str] = []
+        self.prologue_line_height: int = 0
+        self.prologue_total_height: int = 0
+        self.prologue_scroll_start_y: float = float(HEIGHT)
+        self.prologue_scroll_y: float = float(HEIGHT)
+        self.prologue_scroll_speed: float = 26.0  # pixels per second
+        self.prologue_scroll_t0: int = 0
+        self.prologue_done: bool = False
+        self.prologue_skip_prompt_visible: bool = False
+        self.prologue_fade_active: bool = False
+        self.prologue_fade_t0: int = 0
+        self.prologue_fade_dur: int = 700
+        self.prologue_top_margin: int = int(HEIGHT * 0.1)
+        self.prologue_bottom_margin: int = int(HEIGHT * 0.1)
+        self.prologue_area_height: int = HEIGHT - self.prologue_top_margin - self.prologue_bottom_margin
+        self.prologue_font: pygame.font.Font = self.r._load_font(24)
+
         # Persistent state: fog-of-war and level chests
         self.seen_by_level: Dict[int, set] = {}
         self.chests_state: Dict[int, List[Dict[str, Any]]] = {}
@@ -3507,6 +3528,9 @@ class Game:
             elif new_mode == MODE_TITLE:
                 # Keep title silent; gently fade out anything playing
                 self.music.fade_out_all(fade_ms=700)
+            elif new_mode == MODE_PROLOGUE:
+                # Fade in the prologue ambience
+                self.music.crossfade_to('prologue', fade_ms=1500)
         except Exception:
             pass
 
@@ -3833,7 +3857,7 @@ class Game:
                     self.refresh_party_gear_bonuses()
                     self.party.gold = 100
                     self.party.inventory = []
-                    self.mode = MODE_TOWN
+                    self.start_prologue()
                 elif self.title_index == 1:  # Load
                     path = "save.json"
                     if os.path.exists(path):
@@ -3845,6 +3869,188 @@ class Game:
                     pygame.event.post(pygame.event.Event(pygame.QUIT))
             elif event.key == pygame.K_ESCAPE:
                 pygame.event.post(pygame.event.Event(pygame.QUIT))
+
+    def start_prologue(self):
+        path_options = [os.path.join('data', 'prologue.txt'), 'data/prologue.txt']
+        text = ""
+        for path in path_options:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                    break
+            except Exception:
+                continue
+        if not text:
+            text = "Your story starts here."
+        raw_lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        lines = self._wrap_prologue_lines(raw_lines)
+        if not lines:
+            lines = [""]
+        self.prologue_lines = lines
+        # Cache line metrics for scrolling
+        base_line = self.prologue_font.get_linesize()
+        self.prologue_line_height = base_line + 6
+        self.prologue_total_height = max(len(lines), 1) * self.prologue_line_height
+        self.prologue_area_height = HEIGHT - self.prologue_top_margin - self.prologue_bottom_margin
+        area_bottom = self.prologue_top_margin + self.prologue_area_height
+        self.prologue_scroll_start_y = area_bottom + 40
+        self.prologue_scroll_y = self.prologue_scroll_start_y
+        self.prologue_scroll_t0 = pygame.time.get_ticks()
+        self.prologue_done = False
+        self.prologue_skip_prompt_visible = False
+        self.prologue_fade_active = False
+        self.prologue_fade_t0 = 0
+        # Ensure audio eases out during the prologue
+        self.mode = MODE_PROLOGUE
+
+    def _wrap_prologue_lines(self, lines: List[str]) -> List[str]:
+        font = self.prologue_font
+        max_width = WIDTH - 120
+        wrapped: List[str] = []
+        for line in lines:
+            if not line.strip():
+                # Preserve blank lines as paragraph breaks
+                wrapped.append('')
+                continue
+            words = line.split()
+            current = ''
+            for word in words:
+                candidate = word if not current else f"{current} {word}"
+                try:
+                    width = font.size(candidate)[0]
+                except Exception:
+                    width = 0
+                if width <= max_width:
+                    current = candidate
+                    continue
+                if current:
+                    wrapped.append(current)
+                # Handle individual word longer than max width by splitting characters
+                chunk = ''
+                for ch in word:
+                    test = chunk + ch
+                    try:
+                        test_width = font.size(test)[0]
+                    except Exception:
+                        test_width = 0
+                    if test_width <= max_width:
+                        chunk = test
+                    else:
+                        if chunk:
+                            wrapped.append(chunk)
+                        chunk = ch
+                current = chunk
+            if current:
+                wrapped.append(current)
+        return wrapped
+
+    def update_prologue(self):
+        now = pygame.time.get_ticks()
+        if not self.prologue_fade_active:
+            elapsed = (now - self.prologue_scroll_t0) / 1000.0
+            self.prologue_scroll_y = self.prologue_scroll_start_y - elapsed * self.prologue_scroll_speed
+            if not self.prologue_done:
+                if self.prologue_scroll_y + self.prologue_total_height <= self.prologue_top_margin:
+                    self.prologue_done = True
+                    self.start_prologue_fade()
+        else:
+            if now - self.prologue_fade_t0 >= self.prologue_fade_dur:
+                self.finish_prologue()
+
+    def draw_prologue(self):
+        screen = self.screen
+        screen.fill((10, 10, 16))
+        # Title in top margin
+        title = "PROLOGUE"
+        title_surf = self.r.font_big.render(title, True, YELLOW)
+        title_x = WIDTH // 2 - title_surf.get_width() // 2
+        title_y = self.prologue_top_margin // 2 - title_surf.get_height() // 2
+        screen.blit(title_surf, (title_x, title_y))
+
+        font = self.prologue_font
+        line_h = self.prologue_line_height or (font.get_linesize() + 6)
+        base_y = int(self.prologue_scroll_y)
+        text_rect = pygame.Rect(0, self.prologue_top_margin, WIDTH, self.prologue_area_height)
+        prev_clip = screen.get_clip()
+        screen.set_clip(text_rect)
+        try:
+            for idx, line in enumerate(self.prologue_lines):
+                y = base_y + idx * line_h
+                # Skip off-screen rows for efficiency
+                if y < text_rect.top - line_h or y > text_rect.bottom + line_h:
+                    continue
+                if line.strip():
+                    surf = font.render(line, True, LIGHT).convert_alpha()
+                    line_center = y + line_h / 2.0
+                    top_start = self.prologue_top_margin
+                    top_full = top_start + self.prologue_area_height * 0.25
+                    bottom_full = top_start + self.prologue_area_height * 0.75
+                    bottom_end = top_start + self.prologue_area_height
+                    top_factor = 1.0
+                    if line_center <= top_full:
+                        if line_center <= top_start:
+                            top_factor = 0.0
+                        else:
+                            span = max(1e-6, top_full - top_start)
+                            top_factor = max(0.0, min(1.0, (line_center - top_start) / span))
+                    bottom_factor = 1.0
+                    if line_center >= bottom_full:
+                        if line_center >= bottom_end:
+                            bottom_factor = 0.0
+                        else:
+                            span = max(1e-6, bottom_end - bottom_full)
+                            bottom_factor = max(0.0, min(1.0, 1.0 - (line_center - bottom_full) / span))
+                    alpha = int(255 * top_factor * bottom_factor)
+                    if alpha <= 0:
+                        continue
+                    surf.set_alpha(alpha)
+                    x = WIDTH // 2 - surf.get_width() // 2
+                    screen.blit(surf, (x, y))
+                else:
+                    continue
+        finally:
+            screen.set_clip(prev_clip)
+        if self.prologue_skip_prompt_visible and not self.prologue_fade_active and not self.prologue_done:
+            prompt = "Press Enter to Skip"
+            surf = self.r.font_small.render(prompt, True, LIGHT)
+            px = WIDTH - surf.get_width() - 40
+            py = HEIGHT - self.prologue_bottom_margin + (self.prologue_bottom_margin - surf.get_height()) // 2
+            screen.blit(surf, (px, py))
+        if self.prologue_fade_active:
+            now = pygame.time.get_ticks()
+            elapsed = now - self.prologue_fade_t0
+            p = max(0.0, min(1.0, elapsed / max(1, self.prologue_fade_dur)))
+            alpha = int(255 * p)
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            screen.blit(overlay, (0, 0))
+
+    def prologue_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                if self.prologue_fade_active:
+                    return
+                if not self.prologue_skip_prompt_visible and not self.prologue_done:
+                    self.prologue_skip_prompt_visible = True
+                else:
+                    self.start_prologue_fade()
+
+    def start_prologue_fade(self):
+        if self.prologue_fade_active:
+            return
+        self.prologue_fade_active = True
+        self.prologue_fade_t0 = pygame.time.get_ticks()
+        self.prologue_skip_prompt_visible = False
+        self.prologue_done = True
+        try:
+            self.music.fade_out_all(self.prologue_fade_dur)
+        except Exception:
+            pass
+
+    def finish_prologue(self):
+        self.prologue_fade_active = False
+        self.mode = MODE_TOWN
+        self.menu_index = 0
     # --------------- Town ---------------
     def draw_town(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -8082,6 +8288,12 @@ class Game:
             except Exception:
                 pass
             return
+        if self.mode == MODE_PROLOGUE:
+            try:
+                self.update_prologue()
+            except Exception:
+                pass
+            return
         # Smooth maze movement animation progression
         if self.mode in (MODE_MAZE, MODE_COMBAT_INTRO, MODE_SCENE) and self.move_active:
             now = pygame.time.get_ticks()
@@ -8319,6 +8531,8 @@ class Game:
                         continue
                     if self.mode == MODE_TITLE:
                         self.title_input(event)
+                    elif self.mode == MODE_PROLOGUE:
+                        self.prologue_input(event)
                     elif self.mode == MODE_TOWN:
                         self.town_input(event)
                     elif self.mode == MODE_PARTY:
@@ -8370,6 +8584,8 @@ class Game:
             if self.mode == MODE_TITLE:
                 # Title renders fullscreen and hides log
                 self.draw_title()
+            elif self.mode == MODE_PROLOGUE:
+                self.draw_prologue()
             else:
                 self.r.draw_frame()
                 if self.mode == MODE_TOWN:
