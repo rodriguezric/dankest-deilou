@@ -6,10 +6,10 @@ from typing import List, Dict, Any, Optional, Tuple
 import pygame
 
 # Tile constants (match main.py)
-T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U, T_LOCKED = 0, 1, 2, 3, 4, 5
-TOOL_CHEST = 6  # editor-only tool id for chests
-TOOL_NPC = 7    # editor-only tool id for NPCs
-TOOL_ELITE = 8  # editor-only tool id for Elite nodes
+T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U, T_LOCKED, T_END = 0, 1, 2, 3, 4, 5, 6
+TOOL_CHEST = 7  # editor-only tool id for chests
+TOOL_NPC = 8    # editor-only tool id for NPCs
+TOOL_ELITE = 9  # editor-only tool id for Elite nodes
 
 DATA_DIR = 'data'
 LEVEL_DIR = os.path.join(DATA_DIR, 'levels')
@@ -62,6 +62,7 @@ class LevelDoc:
         self.chests: List[Dict[str, Any]] = []
         self.npcs: List[Dict[str, Any]] = []
         self.elites: List[Dict[str, Any]] = []
+        self.end_node: Optional[Tuple[int, int]] = None
         self.stairs_down_target: Optional[Tuple[int, int, int]] = None  # (level_index, x, y)
         self.size: Tuple[int, int] = (W, H)
         self.load()
@@ -168,6 +169,16 @@ class LevelDoc:
                 except Exception:
                     continue
 
+        end_node = self.data.get('end_node')
+        if isinstance(end_node, list) and len(end_node) == 2:
+            try:
+                ex, ey = int(end_node[0]), int(end_node[1])
+                self.end_node = (ex, ey)
+            except Exception:
+                self.end_node = None
+        else:
+            self.end_node = None
+
         # ensure markers reflected in grid
         if self.town_portal:
             x,y = self.town_portal
@@ -196,6 +207,15 @@ class LevelDoc:
                     self._ensure_grid_capacity(x+1, y+1)
                 if 0 <= y < len(self.grid) and 0 <= x < len(self.grid[0]):
                     self.grid[y][x] = T_STAIRS_U
+        if self.end_node:
+            x, y = self.end_node
+            if x < 0 or y < 0:
+                self.end_node = None
+            else:
+                if y >= len(self.grid) or x >= len(self.grid[0]):
+                    self._ensure_grid_capacity(x+1, y+1)
+                if 0 <= y < len(self.grid) and 0 <= x < len(self.grid[0]):
+                    self.grid[y][x] = T_END
 
     def save(self):
         d: Dict[str, Any] = {
@@ -215,6 +235,8 @@ class LevelDoc:
             d['town_portal'] = list(self.town_portal)
         if self.stairs_down_target:
             d['stairs_down_target'] = list(self.stairs_down_target)
+        if self.end_node:
+            d['end_node'] = list(self.end_node)
         save_json(self.path, d)
 
 class Editor:
@@ -285,6 +307,15 @@ class Editor:
                 self.doc.town_portal = (x, y)
         elif prev == T_TOWN and self.doc.town_portal == (x, y):
             self.doc.town_portal = None
+        if t == T_END:
+            prev_end = getattr(self.doc, 'end_node', None)
+            if prev_end and prev_end != (x, y):
+                px, py = prev_end
+                if 0 <= py < len(self.doc.grid) and 0 <= px < len(self.doc.grid[0]):
+                    self.doc.grid[py][px] = T_EMPTY
+            self.doc.end_node = (x, y)
+        elif prev == T_END and getattr(self.doc, 'end_node', None) == (x, y):
+            self.doc.end_node = None
 
     def prompt_input(self, prompt_text: str, initial_text: str = ''):
         self.input_active = True
@@ -382,6 +413,11 @@ class Editor:
                     lock = pygame.Rect(0,0, 8,8)
                     lock.center = (r.centerx, r.centery)
                     pygame.draw.rect(self.screen, (200,180,90), lock, 1)
+                elif t == T_END:
+                    pygame.draw.rect(self.screen, (30,30,34), r)
+                    center = r.center
+                    pygame.draw.circle(self.screen, (200, 160, 255), center, max(3, TILE//4))
+                    pygame.draw.circle(self.screen, (150, 90, 220), center, max(4, TILE//3), 2)
         # Draw chests as overlays
         for c in self.doc.chests:
             x, y = int(c.get('x', -1)), int(c.get('y', -1))
@@ -436,7 +472,7 @@ class Editor:
         self.text_small('Generate', (px+8, py+4))
         py += 30
         self.text_small('S: Save   ,/.: Prev/Next level', (px, py)); py += 18
-        self.text_small('0..8: Select tool   R: Reset', (px, py)); py += 18
+        self.text_small('0..9: Select tool   R: Reset', (px, py)); py += 18
         self.text_small('Right-click stairs-down: link', (px, py)); py += 18
         py += 6
         tools = [
@@ -446,6 +482,7 @@ class Editor:
             (T_STAIRS_D, 'Stairs Down'),
             (T_STAIRS_U, 'Stairs Up'),
             (T_LOCKED, 'Locked Door'),
+            (T_END, 'The End Node'),
             (TOOL_CHEST, 'Chest'),
             (TOOL_NPC, 'NPC'),
             (TOOL_ELITE, 'Elite'),
@@ -466,6 +503,9 @@ class Editor:
                 pygame.draw.polygon(self.screen, YELLOW, [(r.left+6, r.top+6), (r.right-6, r.top+6), (r.centerx, r.bottom-6)])
             elif tid == T_STAIRS_U:
                 pygame.draw.polygon(self.screen, GREEN, [(r.left+6, r.bottom-6), (r.right-6, r.bottom-6), (r.centerx, r.top+6)])
+            elif tid == T_END:
+                pygame.draw.circle(self.screen, (200, 160, 255), r.center, 8)
+                pygame.draw.circle(self.screen, (150, 90, 220), r.center, 10, 1)
             self.tool_rects.append((r, tid))
             py += 36
 
@@ -1199,7 +1239,7 @@ class Editor:
                         self.doc = LevelDoc(self.doc.index + 1)
                         # Rebuild the window so it matches the loaded level's dimensions
                         self.screen = pygame.display.set_mode(window_dims())
-                    elif pygame.K_0 <= event.key <= pygame.K_8:
+                    elif pygame.K_0 <= event.key <= pygame.K_9:
                         self.tool = event.key - pygame.K_0
                     elif event.key == pygame.K_DELETE:
                         # Delete whatever node is under the mouse and leave floor
@@ -1217,6 +1257,8 @@ class Editor:
                             self.doc.stairs_up = None
                         if self.doc.town_portal == (x, y):
                             self.doc.town_portal = None
+                        if getattr(self.doc, 'end_node', None) == (x, y):
+                            self.doc.end_node = None
                         # Remove chest at cell
                         ci = next((i for i,c in enumerate(self.doc.chests) if int(c.get('x',-1))==x and int(c.get('y',-1))==y), None)
                         if ci is not None:
