@@ -39,6 +39,7 @@ MUSIC_LABYRINTH = "labyrinth.wav"
 MUSIC_BATTLE = "battle.wav"
 MUSIC_ELITE_BATTLE = "elite_battle.ogg"
 MUSIC_PROLOGUE = "violet_eerie_ambient.wav"
+MUSIC_ENDING = "violet_ending_ambient.wav"
 
 MAZE_W, MAZE_H = 24, 24
 
@@ -77,6 +78,8 @@ MODE_TRAIT = "TRAIT"   # post-creation trait selection
 MODE_DIALOG = "DIALOG" # NPC dialog
 MODE_QUESTS = "QUESTS" # Quests list
 MODE_WAYPOINT = "WAYPOINT"  # Waypoint fast-travel selection
+MODE_ENDING_TRANSITION = "ENDING_TRANSITION"
+MODE_ENDING = "ENDING"
 
 # Temple costs
 TEMPLE_HEAL_PARTY_COST = 30
@@ -90,6 +93,7 @@ T_TOWN = 2
 T_STAIRS_D = 3
 T_STAIRS_U = 4
 T_LOCKED = 5
+T_END = 6
 
 # Limits
 ACTIVE_MAX = 4
@@ -141,6 +145,7 @@ class MusicManager:
             'battle': self._load_sound(MUSIC_BATTLE),
             'elite_battle': self._load_sound(MUSIC_ELITE_BATTLE),
             'prologue': self._load_sound(MUSIC_PROLOGUE),
+            'ending': self._load_sound(MUSIC_ENDING),
         }
         # Two channels for crossfading
         try:
@@ -590,6 +595,7 @@ class Level:
     stairs_down: Optional[Tuple[int, int]] = None
     stairs_up: Optional[Tuple[int, int]] = None
     town_portal: Optional[Tuple[int, int]] = None
+    end_node: Optional[Tuple[int, int]] = None
     # Encounter config loaded from JSON
     encounter_monsters: List[str] = field(default_factory=list)
     encounter_group: Tuple[int, int] = (1, 3)
@@ -655,6 +661,13 @@ class Dungeon:
                         lvl.town_portal = (tx, ty)
                     except Exception:
                         pass
+                end_pt = data.get('end_node')
+                if isinstance(end_pt, list) and len(end_pt) == 2:
+                    try:
+                        ex, ey = int(end_pt[0]), int(end_pt[1])
+                        lvl.end_node = (ex, ey)
+                    except Exception:
+                        lvl.end_node = None
                 # Encounters
                 enc = data.get('encounters', {})
                 mons = enc.get('monsters', [])
@@ -712,6 +725,13 @@ class Dungeon:
                     lvl.grid[y][x] = T_TOWN
             except Exception:
                 pass
+        if lvl.end_node:
+            try:
+                ex, ey = int(lvl.end_node[0]), int(lvl.end_node[1])
+                if 0 <= ey < len(lvl.grid) and 0 <= ex < len(lvl.grid[0]):
+                    lvl.grid[ey][ex] = T_END
+            except Exception:
+                lvl.end_node = None
         if arrival_pos is not None and not lvl.stairs_up:
             try:
                 ax, ay = int(arrival_pos[0]), int(arrival_pos[1])
@@ -720,7 +740,7 @@ class Dungeon:
                     lvl.grid[ay][ax] = T_STAIRS_U
             except Exception:
                 pass
-        if not lvl.stairs_down:
+        if not lvl.stairs_down and not lvl.end_node:
             sx, sy = self._find_far_open(ix)
             lvl.stairs_down = (sx, sy)
             lvl.grid[sy][sx] = T_STAIRS_D
@@ -860,6 +880,24 @@ class Renderer:
                             # lock
                             lx = sx + cell//2 - 4; ly = sy + cell//2 - 6
                             pygame.draw.rect(view, (200, 180, 90), (lx, ly, 8, 8), 1)
+                        elif t == T_END:
+                            # Pulsing end node: bright purple core with soft glow
+                            tick = pygame.time.get_ticks()
+                            phase = (math.sin(tick / 260.0) + 1.0) * 0.5
+                            cx = sx + cell // 2
+                            cy = sy + cell // 2
+                            core_radius = max(3, int(cell * (0.26 + 0.08 * phase)))
+                            pygame.draw.circle(view, (210, 170, 255), (cx, cy), core_radius)
+                            shell_radius = max(core_radius + 2, int(cell * (0.42 + 0.10 * phase)))
+                            pygame.draw.circle(view, (160, 100, 240), (cx, cy), shell_radius, 2)
+                            glow_size = int(cell * 2.2)
+                            glow = pygame.Surface((glow_size, glow_size), pygame.SRCALPHA)
+                            glow_center = glow_size // 2
+                            outer_radius = min(glow_center, max(shell_radius + cell // 3, cell // 2))
+                            inner_radius = max(core_radius + 2, int(outer_radius * 0.55))
+                            pygame.draw.circle(glow, (150, 80, 220, int(110 + 60 * phase)), (glow_center, glow_center), outer_radius)
+                            pygame.draw.circle(glow, (200, 150, 255, int(70 + 40 * phase)), (glow_center, glow_center), inner_radius)
+                            view.blit(glow, (cx - glow_center, cy - glow_center))
         # Draw chests on top of floor tiles (simple icon), within the radius window
         if chests:
             for c in chests:
@@ -3387,6 +3425,31 @@ class Game:
         self.prologue_area_height: int = HEIGHT - self.prologue_top_margin - self.prologue_bottom_margin
         self.prologue_font: pygame.font.Font = self.r._load_font(24)
 
+        # Ending (The End) scene state
+        self.ending_transition_t0: int = 0
+        self.ending_transition_dur: int = 900
+        self.ending_lines: List[str] = []
+        self.ending_line_height: int = 0
+        self.ending_total_height: int = 0
+        self.ending_scroll_start_y: float = float(HEIGHT)
+        self.ending_scroll_y: float = float(HEIGHT)
+        self.ending_scroll_speed: float = 26.0
+        self.ending_scroll_t0: int = 0
+        self.ending_phase: str = 'idle'  # 'scroll' | 'fade_to_black' | 'title_fade_in' | 'title'
+        self.ending_top_margin: int = int(HEIGHT * 0.1)
+        self.ending_bottom_margin: int = int(HEIGHT * 0.1)
+        self.ending_area_height: int = HEIGHT - self.ending_top_margin - self.ending_bottom_margin
+        self.ending_font: pygame.font.Font = self.r._load_font(24)
+        self.ending_title_font: pygame.font.Font = self.r._load_font(48)
+        self.ending_fade_t0: int = 0
+        self.ending_fade_dur: int = 1000
+        self.ending_title_alpha: int = 0
+        self.ending_title_t0: int = 0
+        self.ending_title_dur: int = 1200
+        self.ending_exit_active: bool = False
+        self.ending_exit_t0: int = 0
+        self.ending_exit_dur: int = 800
+
         # Persistent state: fog-of-war and level chests
         self.seen_by_level: Dict[int, set] = {}
         self.chests_state: Dict[int, List[Dict[str, Any]]] = {}
@@ -3531,6 +3594,10 @@ class Game:
             elif new_mode == MODE_PROLOGUE:
                 # Fade in the prologue ambience
                 self.music.crossfade_to('prologue', fade_ms=1500)
+            elif new_mode == MODE_ENDING_TRANSITION:
+                self.music.fade_out_all(fade_ms=900)
+            elif new_mode == MODE_ENDING:
+                self.music.crossfade_to('ending', fade_ms=1500)
         except Exception:
             pass
 
@@ -3883,7 +3950,7 @@ class Game:
         if not text:
             text = "Your story starts here."
         raw_lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
-        lines = self._wrap_prologue_lines(raw_lines)
+        lines = self._wrap_text_lines(raw_lines, self.prologue_font, WIDTH - 120)
         if not lines:
             lines = [""]
         self.prologue_lines = lines
@@ -3903,9 +3970,7 @@ class Game:
         # Ensure audio eases out during the prologue
         self.mode = MODE_PROLOGUE
 
-    def _wrap_prologue_lines(self, lines: List[str]) -> List[str]:
-        font = self.prologue_font
-        max_width = WIDTH - 120
+    def _wrap_text_lines(self, lines: List[str], font: pygame.font.Font, max_width: int) -> List[str]:
         wrapped: List[str] = []
         for line in lines:
             if not line.strip():
@@ -4050,6 +4115,198 @@ class Game:
     def finish_prologue(self):
         self.prologue_fade_active = False
         self.mode = MODE_TOWN
+        self.menu_index = 0
+
+    def start_end_transition(self):
+        if self.mode in (MODE_ENDING_TRANSITION, MODE_ENDING):
+            return
+        self.ending_exit_active = False
+        self.ending_phase = 'idle'
+        self.ending_transition_t0 = pygame.time.get_ticks()
+        self.mode = MODE_ENDING_TRANSITION
+        try:
+            self.music.fade_out_all(self.ending_transition_dur)
+        except Exception:
+            pass
+
+    def update_end_transition(self):
+        now = pygame.time.get_ticks()
+        if now - self.ending_transition_t0 >= self.ending_transition_dur:
+            self.start_ending_scene()
+
+    def draw_end_transition(self):
+        now = pygame.time.get_ticks()
+        elapsed = now - self.ending_transition_t0
+        p = max(0.0, min(1.0, elapsed / max(1, self.ending_transition_dur)))
+        alpha = int(255 * p)
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((255, 255, 255, alpha))
+        self.screen.blit(overlay, (0, 0))
+
+    def start_ending_scene(self):
+        path_options = [os.path.join('data', 'ending.txt'), 'data/ending.txt']
+        text = ""
+        for path in path_options:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                    break
+            except Exception:
+                continue
+        if not text:
+            text = "The story draws to a close."
+        raw_lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        lines = self._wrap_text_lines(raw_lines, self.ending_font, WIDTH - 120)
+        if not lines:
+            lines = [""]
+        self.ending_lines = lines
+        base_line = self.ending_font.get_linesize()
+        self.ending_line_height = base_line + 6
+        self.ending_total_height = max(len(lines), 1) * self.ending_line_height
+        self.ending_area_height = HEIGHT - self.ending_top_margin - self.ending_bottom_margin
+        area_bottom = self.ending_top_margin + self.ending_area_height
+        self.ending_scroll_start_y = area_bottom + 40
+        self.ending_scroll_y = self.ending_scroll_start_y
+        self.ending_scroll_t0 = pygame.time.get_ticks()
+        self.ending_phase = 'scroll'
+        self.ending_exit_active = False
+        self.ending_title_alpha = 0
+        self.ending_title_t0 = 0
+        self.mode = MODE_ENDING
+
+    def update_ending(self):
+        now = pygame.time.get_ticks()
+        if self.ending_phase == 'scroll':
+            elapsed = (now - self.ending_scroll_t0) / 1000.0
+            self.ending_scroll_y = self.ending_scroll_start_y - elapsed * self.ending_scroll_speed
+            if self.ending_scroll_y + self.ending_total_height <= self.ending_top_margin:
+                self.ending_phase = 'fade_to_black'
+                self.ending_fade_t0 = now
+        elif self.ending_phase == 'fade_to_black':
+            if now - self.ending_fade_t0 >= self.ending_fade_dur:
+                self.ending_phase = 'title_fade_in'
+                self.ending_title_t0 = now
+                self.ending_title_alpha = 0
+        elif self.ending_phase == 'title_fade_in':
+            dur = max(1, self.ending_title_dur)
+            p = max(0.0, min(1.0, (now - self.ending_title_t0) / float(dur)))
+            self.ending_title_alpha = int(255 * p)
+            if p >= 1.0:
+                self.ending_phase = 'title'
+        if self.ending_exit_active:
+            dur = max(1, self.ending_exit_dur)
+            p = max(0.0, min(1.0, (now - self.ending_exit_t0) / float(dur)))
+            if p >= 1.0:
+                self.finish_ending()
+
+    def draw_ending(self):
+        phase = self.ending_phase
+        screen = self.screen
+        text_color = (30, 30, 30)
+        label = ""
+        if phase in ('scroll', 'fade_to_black'):
+            screen.fill((248, 248, 248))
+            label_surf = self.r.font_big.render(label, True, (120, 90, 200))
+            label_x = WIDTH // 2 - label_surf.get_width() // 2
+            label_y = self.ending_top_margin // 2 - label_surf.get_height() // 2
+            screen.blit(label_surf, (label_x, label_y))
+            font = self.ending_font
+            line_h = self.ending_line_height or (font.get_linesize() + 6)
+            base_y = int(self.ending_scroll_y)
+            text_rect = pygame.Rect(0, self.ending_top_margin, WIDTH, self.ending_area_height)
+            prev_clip = screen.get_clip()
+            screen.set_clip(text_rect)
+            try:
+                for idx, line in enumerate(self.ending_lines):
+                    y = base_y + idx * line_h
+                    if y < text_rect.top - line_h or y > text_rect.bottom + line_h:
+                        continue
+                    if line.strip():
+                        surf = font.render(line, True, text_color).convert_alpha()
+                        line_center = y + line_h / 2.0
+                        top_start = self.ending_top_margin
+                        top_full = top_start + self.ending_area_height * 0.25
+                        bottom_full = top_start + self.ending_area_height * 0.75
+                        bottom_end = top_start + self.ending_area_height
+                        top_factor = 1.0
+                        if line_center <= top_full:
+                            if line_center <= top_start:
+                                top_factor = 0.0
+                            else:
+                                span = max(1e-6, top_full - top_start)
+                                top_factor = max(0.0, min(1.0, (line_center - top_start) / span))
+                        bottom_factor = 1.0
+                        if line_center >= bottom_full:
+                            if line_center >= bottom_end:
+                                bottom_factor = 0.0
+                            else:
+                                span = max(1e-6, bottom_end - bottom_full)
+                                bottom_factor = max(0.0, min(1.0, 1.0 - (line_center - bottom_full) / span))
+                        alpha = int(255 * top_factor * bottom_factor)
+                        if alpha <= 0:
+                            continue
+                        surf.set_alpha(alpha)
+                        x = WIDTH // 2 - surf.get_width() // 2
+                        screen.blit(surf, (x, y))
+                    else:
+                        continue
+            finally:
+                screen.set_clip(prev_clip)
+        else:
+            screen.fill((0, 0, 0))
+
+        if phase == 'fade_to_black':
+            now = pygame.time.get_ticks()
+            p = max(0.0, min(1.0, (now - self.ending_fade_t0) / float(max(1, self.ending_fade_dur))))
+            alpha = int(255 * p)
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            screen.blit(overlay, (0, 0))
+        elif phase in ('title_fade_in', 'title'):
+            font = self.ending_title_font
+            text = "THE END"
+            surf = font.render(text, True, (180, 120, 255)).convert_alpha()
+            alpha = self.ending_title_alpha if phase == 'title_fade_in' else 255
+            surf.set_alpha(alpha)
+            x = WIDTH // 2 - surf.get_width() // 2
+            y = HEIGHT // 2 - surf.get_height() // 2
+            screen.blit(surf, (x, y))
+            if phase == 'title':
+                prompt = "Press Enter to return to Title"
+                prompt_surf = self.r.font_small.render(prompt, True, (200, 180, 240))
+                px = WIDTH // 2 - prompt_surf.get_width() // 2
+                py = y + surf.get_height() + 40
+                screen.blit(prompt_surf, (px, py))
+
+        if self.ending_exit_active:
+            now = pygame.time.get_ticks()
+            p = max(0.0, min(1.0, (now - self.ending_exit_t0) / float(max(1, self.ending_exit_dur))))
+            alpha = int(255 * p)
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((255, 255, 255, alpha))
+            screen.blit(overlay, (0, 0))
+
+    def ending_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                if self.ending_phase == 'title' and not self.ending_exit_active:
+                    self.start_ending_exit()
+
+    def start_ending_exit(self):
+        if self.ending_exit_active:
+            return
+        self.ending_exit_active = True
+        self.ending_exit_t0 = pygame.time.get_ticks()
+        try:
+            self.music.fade_out_all(self.ending_exit_dur)
+        except Exception:
+            pass
+
+    def finish_ending(self):
+        self.mode = MODE_TITLE
+        self.title_index = 0
+        self.ending_phase = 'idle'
+        self.ending_exit_active = False
         self.menu_index = 0
     # --------------- Town ---------------
     def draw_town(self):
@@ -5255,6 +5512,8 @@ class Game:
             self.go_down_stairs()
         elif t == T_STAIRS_U:
             self.go_up_stairs()
+        elif t == T_END:
+            self.start_end_transition()
 
     def _move_elites_after_player(self):
         lvl = self.dun.levels[self.level_ix]
@@ -8294,6 +8553,18 @@ class Game:
             except Exception:
                 pass
             return
+        if self.mode == MODE_ENDING_TRANSITION:
+            try:
+                self.update_end_transition()
+            except Exception:
+                pass
+            return
+        if self.mode == MODE_ENDING:
+            try:
+                self.update_ending()
+            except Exception:
+                pass
+            return
         # Smooth maze movement animation progression
         if self.mode in (MODE_MAZE, MODE_COMBAT_INTRO, MODE_SCENE) and self.move_active:
             now = pygame.time.get_ticks()
@@ -8533,6 +8804,10 @@ class Game:
                         self.title_input(event)
                     elif self.mode == MODE_PROLOGUE:
                         self.prologue_input(event)
+                    elif self.mode == MODE_ENDING_TRANSITION:
+                        pass
+                    elif self.mode == MODE_ENDING:
+                        self.ending_input(event)
                     elif self.mode == MODE_TOWN:
                         self.town_input(event)
                     elif self.mode == MODE_PARTY:
@@ -8586,6 +8861,8 @@ class Game:
                 self.draw_title()
             elif self.mode == MODE_PROLOGUE:
                 self.draw_prologue()
+            elif self.mode == MODE_ENDING:
+                self.draw_ending()
             else:
                 self.r.draw_frame()
                 if self.mode == MODE_TOWN:
@@ -8596,6 +8873,9 @@ class Game:
                 elif self.mode == MODE_SCENE:
                     # Custom town<->maze fade with black hold
                     self.draw_scene_transition()
+                elif self.mode == MODE_ENDING_TRANSITION:
+                    self.draw_maze()
+                    self.draw_end_transition()
                 elif self.mode == MODE_PARTY:
                     self.draw_party()
                 elif self.mode == MODE_FORM:
