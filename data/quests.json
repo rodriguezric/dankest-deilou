@@ -15,7 +15,7 @@
     "complete_text": "Sira traces the etchings and grins. The raider routes are revealed!",
     "required_item": "raiders_charm",
     "reward_gold": 80,
-    "reward_item": "potion_small"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_ossuary_pauldron",
@@ -23,7 +23,8 @@
     "desc": "Vicar Ren asks for an Ossuary Pauldron recovered from skeleton guardians.",
     "complete_text": "Ren intones a prayer and sanctifies the bonework, freeing the restless spirit.",
     "required_item": "ossuary_pauldron",
-    "reward_gold": 100
+    "reward_gold": 100,
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_powdered_remains",
@@ -32,7 +33,7 @@
     "complete_text": "Vyra claps in delight and begins infusing the powder into her tonics.",
     "required_item": "powdered_remains",
     "reward_gold": 70,
-    "reward_item": "droplet"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_scarlet_phial",
@@ -41,7 +42,7 @@
     "complete_text": "Lute seals the phial away, eager to distill a powerful coagulant.",
     "required_item": "scarlet_phial",
     "reward_gold": 75,
-    "reward_item": "potion_small"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_skink_cloak",
@@ -50,7 +51,7 @@
     "complete_text": "Kai bows gratefully and disappears back into the reeds.",
     "required_item": "skink_scale_cloak",
     "reward_gold": 85,
-    "reward_item": "boots"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_spirit_lantern",
@@ -59,7 +60,7 @@
     "complete_text": "Iona nods, lantern in hand, and sets about calming the restless dead.",
     "required_item": "spirit_lantern",
     "reward_gold": 110,
-    "reward_item": "serum"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_troll_stew",
@@ -68,7 +69,7 @@
     "complete_text": "Brum ladles the stew into kettles, whistling a victorious tune.",
     "required_item": "troll_hearty_stew",
     "reward_gold": 120,
-    "reward_item": "potion_small"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_cinder_fetish",
@@ -77,7 +78,7 @@
     "complete_text": "Lua sketches the runes eagerly, weaving them into a new ward.",
     "required_item": "cinder_fetish",
     "reward_gold": 130,
-    "reward_item": "droplet"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_veilstone_ring",
@@ -85,7 +86,8 @@
     "desc": "The Shadow Cartographer needs a Veilstone Ring from phantoms.",
     "complete_text": "With the ring, the cartographer sketches new secret routes for the town.",
     "required_item": "veilstone_ring",
-    "reward_gold": 130
+    "reward_gold": 130,
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_trick_pouch",
@@ -94,7 +96,7 @@
     "complete_text": "Denn grins and scatters the reagents into new snares for the town.",
     "required_item": "kobold_trick_pouch",
     "reward_gold": 90,
-    "reward_item": "boots"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_clan_warhorn",
@@ -102,7 +104,8 @@
     "desc": "Captain Lura needs a Clan Warhorn to decipher goblin battle calls.",
     "complete_text": "Lura studies the horn and rewrites the militia\u2019s battle signals.",
     "required_item": "clan_warhorn",
-    "reward_gold": 150
+    "reward_gold": 150,
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_psionic_gel",
@@ -111,7 +114,7 @@
     "complete_text": "Ava layers the gel over her runes, dampening the psychic noise.",
     "required_item": "psionic_gel",
     "reward_gold": 140,
-    "reward_item": "droplet"
+    "reward_item": "trait_tome"
   },
   {
     "id": "quest_censors_seal",
@@ -120,6 +123,6 @@
     "complete_text": "Eden presses the seal into wax, satisfied that justice has been recorded.",
     "required_item": "censors_seal",
     "reward_gold": 180,
-    "reward_item": "serum"
+    "reward_item": "trait_tome"
   }
 ]
