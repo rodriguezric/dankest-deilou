@@ -800,9 +800,11 @@ class Renderer:
         # Status color mapping for stack displays
         self.status_colors: Dict[str, Tuple[int, int, int]] = {
             'bleed': RED,
+            'vamp': (200, 60, 140),
             'poison': GREEN,
             'regen': YELLOW,
             'reassemble': (120, 220, 160),
+            'blink': PURPLE,
             'blind': GRAY,
             'vulnerable': (240, 140, 60),  # orange
             'weak': BLUE,
@@ -1241,7 +1243,7 @@ class Renderer:
             self.text_small(view, f"MP {m.mp}/{m.max_mp}", (rx + w // 2 + 8, ry + 26), WHITE)
             # Status stacks at bottom
             stacks: List[Tuple[str, Tuple[int, int, int]]] = []
-            order = ['bleed', 'poison', 'regen', 'reassemble', 'blind', 'vulnerable', 'weak', 'stun']
+            order = ['bleed', 'vamp', 'poison', 'regen', 'reassemble', 'blink', 'blind', 'vulnerable', 'weak', 'stun']
             for key in order:
                 try:
                     cnt = int(getattr(m, 'statuses', {}).get(key, 0))
@@ -1298,6 +1300,17 @@ class Renderer:
                     border_col = YELLOW
                 elif i in highlight:
                     border_col = YELLOW
+            try:
+                blink_stacks = int(getattr(e, 'statuses', {}).get('blink', 0))
+            except Exception:
+                blink_stacks = 0
+            vampire_blink = getattr(e, 'id', '') == 'vampire' and blink_stacks > 0
+            flicker_alpha = 0
+            if vampire_blink:
+                phase = pygame.time.get_ticks() / 80.0
+                pulse = 0.5 + 0.5 * math.sin(phase)
+                border_col = tuple(min(255, max(0, int(border_col[k] * 0.4 + PURPLE[k] * (0.6 + pulse * 0.25)))) for k in range(3))
+                flicker_alpha = int(80 + pulse * 140)
             rx = x + j * (w + gap) + ox + int(offsets_x.get(i, 0))
             # Apply optional lunge offset (positive moves down)
             ry = y + oy + int(offsets.get(i, 0))
@@ -1313,6 +1326,10 @@ class Renderer:
                 name = e.name[:14]
                 temp.blit(self.font.render(name, True, border_col), (8, 6))
                 temp.blit(self.font_small.render(f"HP {max(0,e.hp):>2}", True, WHITE), (8, 26))
+                if vampire_blink and flicker_alpha > 0:
+                    overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+                    overlay.fill((*PURPLE, flicker_alpha))
+                    temp.blit(overlay, (0, 0))
                 if abs(angle) > 0.01:
                     rot = pygame.transform.rotate(temp, angle)
                     rot.set_alpha(alpha)
@@ -1328,9 +1345,13 @@ class Renderer:
                 name = e.name[:14]
                 self.text(view, name, (rx + 8, ry + 6), border_col)
                 self.text_small(view, f"HP {max(0,e.hp):>2}", (rx + 8, ry + 26), WHITE)
+                if vampire_blink and flicker_alpha > 0:
+                    overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+                    overlay.fill((*PURPLE, flicker_alpha))
+                    view.blit(overlay, (rx, ry))
                 # Status stacks at bottom
                 stacks: List[Tuple[str, Tuple[int, int, int]]] = []
-                order = ['bleed', 'poison', 'regen', 'reassemble', 'blind', 'vulnerable', 'weak', 'stun']
+                order = ['bleed', 'vamp', 'poison', 'regen', 'reassemble', 'blink', 'blind', 'vulnerable', 'weak', 'stun']
                 for key in order:
                     try:
                         cnt = int(getattr(e, 'statuses', {}).get(key, 0))
@@ -1467,6 +1488,7 @@ class Battle:
         self.enemy_spin: Dict[int, Dict[str, int]] = {}
         self.pending_bone_piles: Dict[int, Dict[str, Any]] = {}
         self.kobold_dart_fx: Dict[int, Dict[str, Any]] = {}
+        self.vampire_siphon_done: set = set()
         # Slime Mind (elite) support
         self._slime_mind_ids = set(['slime_mind'])
         # The Censor state
@@ -1585,6 +1607,36 @@ class Battle:
         except Exception:
             pass
 
+    def _vampire_heal_from_vamp(self, amount: int):
+        if amount <= 0:
+            return
+        healed = False
+        for idx, enemy in enumerate(self.enemies):
+            try:
+                if getattr(enemy, 'id', '') != 'vampire':
+                    continue
+                if getattr(enemy, 'hp', 0) <= 0:
+                    continue
+                before = int(enemy.hp)
+                max_hp = max(before, int(getattr(enemy, 'max_hp', before)))
+                enemy.hp = min(max_hp, before + int(amount))
+                gained = int(enemy.hp) - before
+                if gained <= 0:
+                    continue
+                healed = True
+                self.add_floater('enemy', idx, f"+{gained}", 700, YELLOW)
+                try:
+                    self.effects.trigger('enemy', idx, 360, 7, GREEN)
+                except Exception:
+                    pass
+            except Exception:
+                continue
+        if healed:
+            try:
+                self.sfx.play('heal', 0.5)
+            except Exception:
+                pass
+
     # ----- The Censor helpers -----
     def _censor_preferred_target(self) -> Tuple[Optional[int], Optional["Character"]]:
         """Return (gi, character) of the highest-current-MP active member."""
@@ -1649,7 +1701,7 @@ class Battle:
         # Log on first application
         if old == 0 and new > 0:
             who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
-            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak','reassemble':'Reassemble'}.get(name, name.title())
+            label = {'poison':'Poison','bleed':'Bleed','vamp':'Vamp','stun':'Stun','regen':'Regen','blind':'Blind','blink':'Blink','vulnerable':'Vulnerable','weak':'Weak','reassemble':'Reassemble'}.get(name, name.title())
             self.log.add(f"{who} gains {label} ({new}).")
 
     def _status_set(self, side: str, ix: int, name: str, stacks: int):
@@ -1667,7 +1719,7 @@ class Battle:
         # Log on expiry
         if prev > 0 and stacks <= 0:
             who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
-            label = {'poison':'Poison','bleed':'Bleed','stun':'Stun','regen':'Regen','blind':'Blind','vulnerable':'Vulnerable','weak':'Weak','reassemble':'Reassemble'}.get(name, name.title())
+            label = {'poison':'Poison','bleed':'Bleed','vamp':'Vamp','stun':'Stun','regen':'Regen','blind':'Blind','blink':'Blink','vulnerable':'Vulnerable','weak':'Weak','reassemble':'Reassemble'}.get(name, name.title())
             self.log.add(f"{label} on {who} expires.")
 
     def _status_dec(self, side: str, ix: int, name: str, amt: int = 1):
@@ -1695,16 +1747,41 @@ class Battle:
                 e.hp = max(0, e.hp - p)
                 self.add_floater('enemy', ix, str(p), 700, WHITE)
             self._status_dec(side, ix, 'poison', 1)
+        # Vamp: stack-based damage, decays by 1
+        v = self._status_get(side, ix, 'vamp')
+        if v > 0:
+            if side == 'party' and 0 <= ix < len(self.party.members):
+                t = self.party.members[ix]
+                before = int(t.hp)
+                t.hp = max(0, t.hp - v)
+                dealt = before - int(t.hp)
+                if dealt > 0:
+                    self.add_floater('party', ix, str(dealt), 700, WHITE)
+                    self._vampire_heal_from_vamp(dealt)
+            elif side == 'enemy' and 0 <= ix < len(self.enemies):
+                e = self.enemies[ix]
+                before = int(e.hp)
+                e.hp = max(0, e.hp - v)
+                dealt = before - int(e.hp)
+                if dealt > 0:
+                    self.add_floater('enemy', ix, str(dealt), 700, WHITE)
+            self._status_dec(side, ix, 'vamp', 1)
         # Bleed: 1 damage
         if self._status_get(side, ix, 'bleed') > 0:
-            if side == 'party':
+            if side == 'party' and 0 <= ix < len(self.party.members):
                 t = self.party.members[ix]
+                before = int(t.hp)
                 t.hp = max(0, t.hp - 1)
-                self.add_floater('party', ix, '1', 700, WHITE)
-            else:
+                dealt = before - int(t.hp)
+                if dealt > 0:
+                    self.add_floater('party', ix, str(dealt), 700, WHITE)
+            elif side == 'enemy' and 0 <= ix < len(self.enemies):
                 e = self.enemies[ix]
+                before = int(e.hp)
                 e.hp = max(0, e.hp - 1)
-                self.add_floater('enemy', ix, '1', 700, WHITE)
+                dealt = before - int(e.hp)
+                if dealt > 0:
+                    self.add_floater('enemy', ix, str(dealt), 700, WHITE)
         # Regen: heal X and reduce
         r = self._status_get(side, ix, 'regen')
         if r > 0:
@@ -1724,6 +1801,33 @@ class Battle:
             self._status_dec(side, ix, 'vulnerable', 1)
         if self._status_get(side, ix, 'weak') > 0:
             self._status_dec(side, ix, 'weak', 1)
+        # If the unit died from status effects, mark and skip their turn
+        if side == 'party' and 0 <= ix < len(self.party.members):
+            t = self.party.members[ix]
+            if getattr(t, 'hp', 0) <= 0:
+                if getattr(t, 'alive', True):
+                    t.hp = 0
+                    t.alive = False
+                    self.downed_party[ix] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                    try:
+                        self.effects.trigger('party', ix, 300, 7, RED)
+                    except Exception:
+                        pass
+                    self.log.add(f"{t.name} succumbs to lingering wounds!")
+                return True
+        elif side == 'enemy' and 0 <= ix < len(self.enemies):
+            e = self.enemies[ix]
+            if getattr(e, 'hp', 0) <= 0:
+                self.enemies[ix].hp = 0
+                if ix not in self.dying_enemies:
+                    self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                    try:
+                        self.effects.trigger('enemy', ix, 300, 7, WHITE)
+                    except Exception:
+                        pass
+                    self._on_enemy_defeated(ix)
+                    self.log.add(f"{e.name} collapses!")
+                return True
         return False
 
     def start_random(self, allowed: Optional[List[str]] = None, group: Tuple[int, int] = (1, 3), floor_num: int = 1):
@@ -1919,6 +2023,64 @@ class Battle:
                     'hit': hit, 'dmg': dmg,
                     'label': f"{e.name} latches onto {t.name} and drinks deeply!",
                     'miss_label': f"{t.name} shrugs off the bite!"}
+        if mid == 'vampire':
+            maxhp = max(1, int(getattr(e, 'max_hp', e.hp)))
+            threshold = max(1, int(math.ceil(0.25 * maxhp)))
+            if ix not in self.vampire_siphon_done and e.hp <= threshold:
+                self.vampire_siphon_done.add(ix)
+                return {
+                    'type': 'vampire_siphon',
+                    'actor_side': 'enemy', 'actor_index': ix,
+                    'vamp_stacks': 2,
+                    'blink_stacks': 3,
+                    'label': f"{e.name} exhales a sanguine siphon!"
+                }
+            vamp_targets: List[int] = []
+            for gi_idx in self.party.active:
+                if not (0 <= gi_idx < len(self.party.members)):
+                    continue
+                member = self.party.members[gi_idx]
+                if not (member.alive and member.hp > 0):
+                    continue
+                if self._status_get('party', gi_idx, 'vamp') > 0:
+                    vamp_targets.append(gi_idx)
+            if vamp_targets and random.random() < 0.65:
+                target_gi = random.choice(vamp_targets)
+                target = self.party.members[target_gi]
+                hit = random.random() < 0.7
+                dmg = random.randint(e.atk_low, e.atk_high + 1)
+                return {
+                    'type': 'suck_blood',
+                    'actor_side': 'enemy', 'actor_index': ix,
+                    'target_side': 'party', 'target_index': target_gi,
+                    'hit': hit, 'dmg': dmg,
+                    'label': f"{e.name} siphons {target.name}'s blood!",
+                    'miss_label': f"{target.name} slips free of the fangs!"
+                }
+            bite_target = t if not vamp_targets else random.choice(targets)
+            bite_gi = self.party.members.index(bite_target)
+            if random.random() < 0.6:
+                hit = random.random() < 0.72
+                dmg = random.randint(e.atk_low, e.atk_high + 1)
+                return {
+                    'type': 'attack',
+                    'actor_side': 'enemy', 'actor_index': ix,
+                    'target_side': 'party', 'target_index': bite_gi,
+                    'hit': hit, 'dmg': dmg,
+                    'label': f"{e.name} bites deeply into {bite_target.name}!",
+                    'miss_label': f"{bite_target.name} dodges the fangs!",
+                    'apply_vamp': 3
+                }
+            hit = random.random() < 0.68
+            dmg = random.randint(e.atk_low, e.atk_high + 1)
+            return {
+                'type': 'attack',
+                'actor_side': 'enemy', 'actor_index': ix,
+                'target_side': 'party', 'target_index': gi,
+                'hit': hit, 'dmg': dmg,
+                'label': f"{e.name} slashes at {t.name}",
+                'miss_label': f"{e.name} misses {t.name}."
+            }
         if mid == 'skeleton':
             r = random.random()
             if r < 0.7:
@@ -2436,6 +2598,18 @@ class Battle:
                 if self._status_get(a_side, a_ix, 'blind') > 0:
                     act['hit'] = False
                     self._status_dec(a_side, a_ix, 'blind', 1)
+            if act.get('type') == 'attack' and act.get('target_side') == 'enemy':
+                ti = act.get('target_index', -1)
+                if 0 <= ti < len(self.enemies):
+                    blink_stacks = self._status_get('enemy', ti, 'blink')
+                    if blink_stacks > 0:
+                        act['hit'] = False
+                        act['blink_forced'] = True
+                        name = self.enemies[ti].name
+                        if act.get('miss_label'):
+                            act['miss_label'] = f"{act['miss_label']} The mist scatters the blow!"
+                        else:
+                            act['miss_label'] = f"{name} flickers into mist!"
             # The Censor: immune to targeted magic -> miss + gains regen
             if act.get('type') == 'spell' and act.get('target_side') == 'enemy':
                 i = act.get('target_index', -1)
@@ -2503,6 +2677,10 @@ class Battle:
                             # animate a brief downed effect
                             self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
                         self.effects.trigger('party', gi, 300, 7)
+                        vamp_add = int(act.get('apply_vamp', 0))
+                        if vamp_add > 0:
+                            self._status_add('party', gi, 'vamp', vamp_add)
+                            self.add_floater('party', gi, 'VAMP', 700, PURPLE)
                         if act.get('bone_bash') and act.get('hit'):
                             self._status_add('party', gi, 'vulnerable', 1)
                             self.add_floater('party', gi, 'VULN', 700, YELLOW)
@@ -2516,6 +2694,44 @@ class Battle:
                 except Exception:
                     pass
                 self.log.add(act.get('miss_label', 'The attack misses.'))
+                if act.get('type') == 'attack' and side == 'enemy':
+                    blink_before = self._status_get('enemy', idx, 'blink')
+                    if blink_before > 0:
+                        self._status_dec('enemy', idx, 'blink', 1)
+                        self.add_floater('enemy', idx, 'BLINK-', 700, PURPLE)
+                        try:
+                            self.effects.trigger('enemy', idx, 220, 5, PURPLE)
+                        except Exception:
+                            pass
+                        remaining = self._status_get('enemy', idx, 'blink')
+                        if act.get('blink_forced') and 0 <= idx < len(self.enemies):
+                            self.log.add(f"Mist peels away from {self.enemies[idx].name} ({remaining} Blink).")
+        elif act['type'] == 'vampire_siphon':
+            ai = act.get('actor_index', -1)
+            vamp_stacks = max(0, int(act.get('vamp_stacks', 0)))
+            blink_stacks = max(0, int(act.get('blink_stacks', 0)))
+            if act.get('label'):
+                self.log.add(act['label'])
+            applied = False
+            if vamp_stacks > 0:
+                for gi, member in enumerate(self.party.members):
+                    if not (member.alive and member.hp > 0):
+                        continue
+                    self._status_add('party', gi, 'vamp', vamp_stacks)
+                    self.add_floater('party', gi, 'VAMP', 700, PURPLE)
+                    applied = True
+            if applied:
+                self.log.add('Blood mist lashes the party!')
+            if 0 <= ai < len(self.enemies) and blink_stacks > 0:
+                vamp = self.enemies[ai]
+                if getattr(vamp, 'hp', 0) > 0:
+                    self._status_set('enemy', ai, 'blink', blink_stacks)
+                    self.add_floater('enemy', ai, 'BLINK', 700, PURPLE)
+                    try:
+                        self.effects.trigger('enemy', ai, 460, 9, PURPLE)
+                    except Exception:
+                        pass
+                    self.log.add(f"Mist enfolds {vamp.name}.")
         elif act['type'] == 'suck_blood':
             ai = act.get('actor_index', -1)
             gi = act.get('target_index', -1)
@@ -4692,7 +4908,7 @@ class Game:
             right_y += 8
             self.r.text(view, "Status Effects:", (right_x, right_y)); right_y += 20
             # Build stacks in the same order and style as battle windows
-            order = ['bleed', 'poison', 'regen', 'reassemble', 'blind', 'vulnerable', 'weak', 'stun']
+            order = ['bleed', 'vamp', 'poison', 'regen', 'reassemble', 'blink', 'blind', 'vulnerable', 'weak', 'stun']
             stacks = []
             for key in order:
                 try:
@@ -8606,6 +8822,15 @@ class Game:
                             else:
                                 m.statuses.pop('poison', None)
                                 self.log.add(f"Poison on {m.name} expires.")
+                        v_stacks = int(m.statuses.get('vamp', 0))
+                        if v_stacks > 0:
+                            m.hp = max(0, m.hp - v_stacks)
+                            newv = v_stacks - 1
+                            if newv > 0:
+                                m.statuses['vamp'] = newv
+                            else:
+                                m.statuses.pop('vamp', None)
+                                self.log.add(f"Vamp on {m.name} expires.")
                         # Bleed tick (no expiry here)
                         if int(m.statuses.get('bleed', 0)) > 0:
                             m.hp = max(0, m.hp - 1)

@@ -208,5 +208,14 @@
         "chance": 1
       }
     ]
+  },
+  {
+    "id": "vampire",
+    "name": "Vampire",
+    "archetype": "adept",
+    "tier": "elite",
+    "gold_low": 16,
+    "gold_high": 48,
+    "drops": []
   }
 ]
