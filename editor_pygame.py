@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, json
 import random
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 
 import pygame
 
@@ -49,6 +49,33 @@ def save_json(path, data):
     with open(path, 'w') as f:
         json.dump(data, f, indent=2)
 
+def pick_item_for_floor(editor: 'Editor') -> str:
+    floor_level = max(1, int(getattr(editor.doc, 'index', 0)) + 1)
+    suitable: List[str] = []
+    higher: List[Tuple[int, str]] = []
+    for item in getattr(editor, 'items', []) or []:
+        if not isinstance(item, dict):
+            continue
+        iid = item.get('id')
+        if not iid:
+            continue
+        req = item.get('req')
+        req_level = 0
+        if isinstance(req, dict):
+            lvl = req.get('level')
+            if isinstance(lvl, (int, float)):
+                req_level = int(lvl)
+        if req_level <= floor_level:
+            suitable.append(str(iid))
+        else:
+            higher.append((req_level, str(iid)))
+    if suitable:
+        return random.choice(suitable)
+    if higher:
+        higher.sort(key=lambda tpl: tpl[0])
+        return higher[0][1]
+    return 'potion_small'
+
 class LevelDoc:
     def __init__(self, index: int):
         self.index = index
@@ -63,6 +90,7 @@ class LevelDoc:
         self.npcs: List[Dict[str, Any]] = []
         self.elites: List[Dict[str, Any]] = []
         self.end_node: Optional[Tuple[int, int]] = None
+        self.quest_id: Optional[str] = None
         self.stairs_down_target: Optional[Tuple[int, int, int]] = None  # (level_index, x, y)
         self.size: Tuple[int, int] = (W, H)
         self.load()
@@ -178,6 +206,7 @@ class LevelDoc:
                 self.end_node = None
         else:
             self.end_node = None
+        self.quest_id = self.data.get('quest_id')
 
         # ensure markers reflected in grid
         if self.town_portal:
@@ -237,6 +266,8 @@ class LevelDoc:
             d['stairs_down_target'] = list(self.stairs_down_target)
         if self.end_node:
             d['end_node'] = list(self.end_node)
+        if self.quest_id:
+            d['quest_id'] = self.quest_id
         save_json(self.path, d)
 
 class Editor:
@@ -276,8 +307,9 @@ class Editor:
         self.monsters: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'monsters.json'), [])
         # Items list for chest assignment UI
         self.items: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'items.json'), [])
-        # NPC list for NPC node assignment
-        self.npcs: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'npcs.json'), [])
+        # NPC and quest definitions for higher-level features
+        self.npc_defs: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'npcs.json'), [])
+        self.quests: List[Dict[str, Any]] = load_json(os.path.join(DATA_DIR, 'quests.json'), [])
 
     def grid_pos_from_mouse(self, mx, my):
         gx = (mx - MARGIN) // TILE
@@ -379,6 +411,34 @@ class Editor:
         self.doc.stairs_down_target = (tgt_ix, tx, ty)
         self.doc.save()
         self.status = f'Linked down to level {tgt_ix} at {tx},{ty}'
+
+    def handle_adjust_stairs_up(self, x, y):
+        global W, H
+        if self.doc.index <= 0:
+            self.status = 'No previous level to update'
+            return
+        prev_ix = self.doc.index - 1
+        prev_size = (W, H)
+        prev = LevelDoc(prev_ix)
+        target = getattr(prev, 'stairs_down_target', None)
+        if target and isinstance(target, (list, tuple)) and len(target) == 3 and target[0] == self.doc.index:
+            prev.stairs_down_target = (self.doc.index, x, y)
+        elif not target or not isinstance(target, (list, tuple)) or len(target) != 3 or target[0] in (None, -1):
+            if getattr(prev, 'stairs_down', None):
+                prev.stairs_down_target = (self.doc.index, x, y)
+            else:
+                self.status = 'Previous level has stairs-up but no stairs-down to link'
+                return
+        else:
+            self.status = 'Previous level targets a different floor; adjust manually'
+            return
+        prev.save()
+        # restore current grid dimensions
+        W, H = prev_size
+        self.doc.grid[y][x] = T_STAIRS_U
+        self.doc.stairs_up = (x, y)
+        self.doc.save()
+        self.status = f'Updated level {prev_ix} stairs-down target to {x},{y}'
 
     def draw(self):
         self.screen.fill(BG)
@@ -593,7 +653,7 @@ class Editor:
             pygame.draw.rect(self.screen, (20,20,26), box); pygame.draw.rect(self.screen, YELLOW, box, 2)
             x,y=box.x+16, box.y+16
             self.text('Generate', (x,y), YELLOW); y+=28
-            opts=[('Maze','maze'), ('Rooms + halls','rooms'), ('Close','close')]
+            opts=[('Level','level'), ('Treasure','treasure'), ('Theme','theme'), ('Close','close')]
             self.gen_opt_rects=[]
             for label,_id in opts:
                 r=pygame.Rect(x,y, box.w-32, 30)
@@ -906,13 +966,13 @@ class Editor:
         self.suggestion_index = -1
 
         def all_ids():
-            return [str(n.get('id')) for n in self.npcs if isinstance(n, dict) and n.get('id')]
+            return [str(n.get('id')) for n in self.npc_defs if isinstance(n, dict) and n.get('id')]
 
         def find_matches(prefix: str) -> List[Tuple[str, str]]:
             ids = all_ids()
             pref = prefix.lower()
             matches = [i for i in ids if i.lower().startswith(pref)] if pref else ids
-            id_to_name = {n.get('id'): n.get('name') for n in self.npcs if isinstance(n, dict)}
+            id_to_name = {n.get('id'): n.get('name') for n in self.npc_defs if isinstance(n, dict)}
             return [(i, f"{i} - {id_to_name.get(i, '')}") for i in matches]
 
         while self.input_active:
@@ -1115,11 +1175,21 @@ class Editor:
                     if self.gen_menu:
                         for r,_id in self.gen_opt_rects:
                             if r.collidepoint(mx,my):
-                                if _id=='maze':
-                                    generate_maze_level(self)
-                                    self.gen_menu=False
-                                elif _id=='rooms':
+                                if _id=='level':
                                     generate_rooms_level(self)
+                                    self.gen_menu=False
+                                elif _id=='treasure':
+                                    self.prompt_input('Number of treasures to create:')
+                                    count_input = self.read_blocking_input()
+                                    if count_input:
+                                        try:
+                                            count = max(0, int(count_input))
+                                            generate_treasure(self, count)
+                                        except Exception:
+                                            self.status = 'Treasure generation cancelled'
+                                    self.gen_menu=False
+                                elif _id=='theme':
+                                    generate_theme(self)
                                     self.gen_menu=False
                                 elif _id=='close':
                                     self.gen_menu=False
@@ -1190,10 +1260,12 @@ class Editor:
                             elif event.button == 3:
                                 if gp:
                                     x, y = gp
-                                    if self.doc.grid[y][x] == T_STAIRS_D:
-                                        self.handle_link_stairs_down(x, y)
-                                    else:
-                                        # Right-click a chest to set item id
+                    if self.doc.grid[y][x] == T_STAIRS_D:
+                        self.handle_link_stairs_down(x, y)
+                    elif self.doc.grid[y][x] == T_STAIRS_U:
+                        self.handle_adjust_stairs_up(x, y)
+                    else:
+                        # Right-click a chest to set item id
                                         idx = next((i for i,c in enumerate(self.doc.chests) if c.get('x')==x and c.get('y')==y), None)
                                         if idx is not None:
                                             current_iid = self.doc.chests[idx].get('iid')
@@ -1228,8 +1300,6 @@ class Editor:
                     elif event.key == pygame.K_g:
                         self.gen_menu=True; self.file_menu=False; self.enc_menu=False
                     elif event.key == pygame.K_m:
-                        generate_maze_level(self)
-                    elif event.key == pygame.K_n:
                         generate_rooms_level(self)
                     elif event.key in (pygame.K_COMMA,):
                         self.doc = LevelDoc(max(0, self.doc.index - 1))
@@ -1393,182 +1463,246 @@ def generate_maze_level(self: 'Editor'):
     self.status = 'Generated maze'
 
 def generate_rooms_level(self: 'Editor'):
-    # Start with solid walls and apply markers
+    # Bob Nystrom style BSP-less random rooms + tunnels
     grid = [[T_WALL for _ in range(W)] for _ in range(H)]
-    _reapply_markers(self.doc, grid)
-    # Create a 3x3 centered room for each marker, and center the marker in it
-    centers: List[Tuple[int,int]] = []
-    rooms: List[Tuple[int,int,int,int]] = []  # (left, top, w, h)
-    door_candidates: List[Tuple[int, int]] = []
-    # First center each marker
-    for x,y,t in _all_markers(self.doc):
-        cx,cy=_clamp_center(x,y)
-        _carve_room(grid, cx-1, cy-1, 3, 3)
-        # Move marker to center in doc
-        if t==T_TOWN:
-            self.doc.town_portal=(cx,cy)
-        elif t==T_STAIRS_U:
-            self.doc.stairs_up=(cx,cy)
-        elif t==T_STAIRS_D:
-            self.doc.stairs_down=(cx,cy)
-        grid[cy][cx]=t
-        centers.append((cx,cy))
-        rooms.append((cx-1, cy-1, 3, 3))
-    # Random additional rooms (3x3, 6x3, 3x6) without overlap
-    def overlaps(a, b, pad=1):
-        ax,ay,aw,ah=a; bx,by,bw,bh=b
-        ar=pygame.Rect(ax,ay,aw,ah).inflate(pad*2,pad*2)
-        br=pygame.Rect(bx,by,bw,bh).inflate(pad*2,pad*2)
-        return ar.colliderect(br)
-    sizes=[(3,3),(6,3),(3,6)]
-    attempts=max(10,(W*H)//16)
-    for _ in range(attempts):
-        w,h=random.choice(sizes)
-        x=random.randint(1, max(1, W-w-2))
-        y=random.randint(1, max(1, H-h-2))
-        cand=(x,y,w,h)
-        if any(overlaps(cand, ex, pad=1) for ex in rooms):
+
+    room_sizes = [(3, 3), (4, 3), (3, 4)]
+    max_rooms = max(12, (W * H) // 32)
+    max_attempts = max_rooms * 5
+
+    rooms: List[pygame.Rect] = []
+    centers: List[Tuple[int, int]] = []
+
+    for _ in range(max_attempts):
+        if len(rooms) >= max_rooms:
+            break
+        w, h = random.choice(room_sizes)
+        if W - w - 2 <= 0 or H - h - 2 <= 0:
             continue
-        rooms.append(cand)
-    # Carve rooms and record centers
-    for (x,y,w,h) in rooms:
-        _carve_room(grid, x, y, w, h)
-        cx,cy= x + w//2, y + h//2
-        centers.append((cx,cy))
-    # Connect centers with simple L corridors in sequence
-    if centers:
-        # Deduplicate while preserving order
-        seen=set(); ordered=[]
-        for c in centers:
-            if c not in seen:
-                seen.add(c); ordered.append(c)
-        def carve_corridor(x0: int, y0: int, x1: int, y1: int) -> List[Tuple[int, int]]:
-            path: List[Tuple[int, int]] = []
-            x, y = x0, y0
-            if x1 != x0:
-                step = 1 if x1 > x0 else -1
-                while x != x1:
-                    x += step
-                    if _in_bounds_xy(x, y) and not _is_marker(grid[y][x]):
-                        grid[y][x] = T_EMPTY
-                    path.append((x, y))
-            if y1 != y0:
-                step = 1 if y1 > y0 else -1
-                while y != y1:
-                    y += step
-                    if _in_bounds_xy(x, y) and not _is_marker(grid[y][x]):
-                        grid[y][x] = T_EMPTY
-                    path.append((x, y))
-            return path
+        x = random.randint(1, max(1, W - w - 2))
+        y = random.randint(1, max(1, H - h - 2))
+        room = pygame.Rect(x, y, w, h)
+        padded = room.inflate(2, 2)
+        if any(padded.colliderect(r.inflate(2, 2)) for r in rooms):
+            continue
+        rooms.append(room)
+        for yy in range(room.top, room.bottom):
+            for xx in range(room.left, room.right):
+                if 0 <= yy < H and 0 <= xx < W:
+                    grid[yy][xx] = T_EMPTY
+        cx = room.left + room.width // 2
+        cy = room.top + room.height // 2
+        centers.append((cx, cy))
 
-        seen_doors: set[Tuple[int, int]] = set()
-        for i in range(1,len(ordered)):
-            x0,y0=ordered[i-1]; x1,y1=ordered[i]
-            path = carve_corridor(x0, y0, x1, y1)
-            if len(path) > 2:
-                # Take the second step along the hallway so the door is not flush with the room entrance
-                candidate = path[1]
-                if _in_bounds_xy(*candidate) and grid[candidate[1]][candidate[0]] == T_EMPTY and candidate not in seen_doors:
-                    seen_doors.add(candidate)
-                    door_candidates.append(candidate)
+    if not rooms:
+        w, h = random.choice(room_sizes)
+        w = min(w, max(3, W - 2))
+        h = min(h, max(3, H - 2))
+        x = max(1, (W // 2) - w // 2)
+        y = max(1, (H // 2) - h // 2)
+        x = min(x, W - w - 1)
+        y = min(y, H - h - 1)
+        room = pygame.Rect(x, y, w, h)
+        rooms.append(room)
+        for yy in range(room.top, room.bottom):
+            for xx in range(room.left, room.right):
+                if 0 <= yy < H and 0 <= xx < W:
+                    grid[yy][xx] = T_EMPTY
+        centers.append((room.left + room.width // 2, room.top + room.height // 2))
+
+    def carve_horiz(y: int, x1: int, x2: int):
+        if x1 > x2:
+            x1, x2 = x2, x1
+        for x in range(x1, x2 + 1):
+            if 0 <= y < H and 0 <= x < W and not _is_marker(grid[y][x]):
+                grid[y][x] = T_EMPTY
+
+    def carve_vert(x: int, y1: int, y2: int):
+        if y1 > y2:
+            y1, y2 = y2, y1
+        for y in range(y1, y2 + 1):
+            if 0 <= y < H and 0 <= x < W and not _is_marker(grid[y][x]):
+                grid[y][x] = T_EMPTY
+
+    centers.sort(key=lambda c: (c[0], c[1]))
+    for i in range(1, len(centers)):
+        (x1, y1) = centers[i - 1]
+        (x2, y2) = centers[i]
+        if random.random() < 0.5:
+            carve_horiz(y1, x1, x2)
+            carve_vert(x2, y1, y2)
+        else:
+            carve_vert(x1, y1, y2)
+            carve_horiz(y2, x1, x2)
+
+    extra_connections = max(0, len(centers) // 3)
+    for _ in range(extra_connections):
+        if len(centers) < 2:
+            break
+        a, b = random.sample(centers, 2)
+        carve_horiz(a[1], a[0], b[0])
+        carve_vert(b[0], a[1], b[1])
+
     _ensure_borders(grid)
-    # Reset interactable objects for the fresh layout
-    self.doc.chests = []
-    self.doc.elites = []
-
-    def pick_item_for_floor() -> str:
-        floor_level = max(1, int(self.doc.index) + 1)
-        suitable: List[str] = []
-        higher: List[Tuple[int, str]] = []
-        for item in getattr(self, 'items', []) or []:
-            if not isinstance(item, dict):
-                continue
-            iid = item.get('id')
-            if not iid:
-                continue
-            req = item.get('req')
-            req_level = 0
-            if isinstance(req, dict):
-                lvl = req.get('level')
-                if isinstance(lvl, (int, float)):
-                    req_level = int(lvl)
-            if req_level <= floor_level:
-                suitable.append(str(iid))
-            else:
-                higher.append((req_level, str(iid)))
-        if suitable:
-            return random.choice(suitable)
-        if higher:
-            higher.sort(key=lambda tpl: tpl[0])
-            return higher[0][1]
-        return 'potion_small'
-
-    # Place treasures in distinct 3x3 rooms
-    three_by_three_centers: List[Tuple[int, int]] = []
-    for left, top, w, h in rooms:
-        if w == 3 and h == 3:
-            cx, cy = left + w//2, top + h//2
-            if _in_bounds_xy(cx, cy) and grid[cy][cx] == T_EMPTY:
-                three_by_three_centers.append((cx, cy))
-    random.shuffle(three_by_three_centers)
-    if three_by_three_centers:
-        max_chests = min(2, len(three_by_three_centers))
-        desired = random.randint(1, max_chests)
-        chosen_chests: List[Tuple[int, int]] = []
-        for cx, cy in three_by_three_centers:
-            if all(abs(cx - ox) + abs(cy - oy) >= 4 for ox, oy in chosen_chests):
-                chosen_chests.append((cx, cy))
-            if len(chosen_chests) >= desired:
-                break
-        for cx, cy in chosen_chests:
-            self.doc.chests.append({'x': cx, 'y': cy, 'iid': pick_item_for_floor()})
-
-    # Add doors near the start of select hallways and ensure they sit within the hall
-    filtered_doors = [pos for pos in door_candidates if grid[pos[1]][pos[0]] == T_EMPTY]
-    if filtered_doors:
-        num_doors = random.randint(1, min(3, len(filtered_doors)))
-        for dx, dy in random.sample(filtered_doors, num_doors):
-            grid[dy][dx] = T_LOCKED
-
-    # Drop in a single elite inside a room
-    candidate_elite_spots = [
-        (left + w//2, top + h//2)
-        for left, top, w, h in rooms
-        if _in_bounds_xy(left + w//2, top + h//2)
-        and grid[top + h//2][left + w//2] == T_EMPTY
-    ]
-    chest_positions = {(c['x'], c['y']) for c in self.doc.chests}
-    candidate_elite_spots = [pos for pos in candidate_elite_spots if pos not in chest_positions]
-    if candidate_elite_spots:
-        ex, ey = random.choice(candidate_elite_spots)
-        elite_ids = [str(m.get('id')) for m in getattr(self, 'monsters', []) if isinstance(m, dict) and str(m.get('tier', '')).lower() == 'elite' and m.get('id')]
-        elite_id = elite_ids and random.choice(elite_ids) or 'goblin_chief'
-        pattern = random.choice(['up_down', 'left_right'])
-        self.doc.elites.append({'x': ex, 'y': ey, 'id': elite_id, 'pattern': pattern})
-
-    # Place a downstairs at least three tiles from the border
-    occupied = chest_positions.copy()
-    if self.doc.elites:
-        occupied.add((self.doc.elites[0]['x'], self.doc.elites[0]['y']))
-    stair_candidates = [
-        (x, y)
-        for y in range(3, max(3, H - 3))
-        for x in range(3, max(3, W - 3))
-        if grid[y][x] == T_EMPTY and (x, y) not in occupied
-    ]
-    if not stair_candidates:
-        stair_candidates = [(x, y) for y in range(1, H-1) for x in range(1, W-1) if grid[y][x] == T_EMPTY]
-    if stair_candidates:
-        sx, sy = random.choice(stair_candidates)
-        grid[sy][sx] = T_STAIRS_D
-        self.doc.stairs_down = (sx, sy)
-        self.doc.stairs_down_target = None
-    else:
-        self.doc.stairs_down = None
 
     self.doc.grid = grid
     _reapply_markers(self.doc, self.doc.grid)
-    self.status = 'Generated rooms + halls'
+    self.doc.chests = []
+    self.doc.elites = []
+    self.doc.stairs_down = None
+    self.doc.stairs_down_target = None
+
+    self.status = 'Generated level layout'
+
+
+def _find_3x3_room_centers(grid: List[List[int]]) -> List[Tuple[int, int]]:
+    results: List[Tuple[int, int]] = []
+    h = len(grid)
+    w = len(grid[0]) if h else 0
+    for y in range(2, h - 2):
+        for x in range(2, w - 2):
+            # All tiles in the 3x3 core must be floor
+            core_ok = True
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if grid[y + dy][x + dx] != T_EMPTY:
+                        core_ok = False
+                        break
+                if not core_ok:
+                    break
+            if not core_ok:
+                continue
+            # Require the ring two tiles out to mostly be walls, allowing at most one opening (door/corridor)
+            openings = 0
+            for dx, dy in ((2, 0), (-2, 0), (0, 2), (0, -2)):
+                nx, ny = x + dx, y + dy
+                if not _in_bounds_xy(nx, ny):
+                    core_ok = False
+                    break
+                if grid[ny][nx] == T_EMPTY:
+                    openings += 1
+            if not core_ok or openings > 1:
+                continue
+            results.append((x, y))
+    return results
+
+
+def generate_treasure(self: 'Editor', desired: int):
+    if desired <= 0:
+        self.status = 'Treasure generation cancelled'
+        return
+    centers = _find_3x3_room_centers(self.doc.grid)
+    if not centers:
+        self.status = 'No 3x3 rooms available'
+        return
+    random.shuffle(centers)
+    center_set = set(centers)
+    self.doc.chests = [c for c in self.doc.chests if (int(c.get('x', -999)), int(c.get('y', -999))) not in center_set]
+    existing = {(int(c.get('x', -999)), int(c.get('y', -999))) for c in self.doc.chests}
+    limit = min(desired, len(centers))
+    placed = 0
+    for cx, cy in centers:
+        if (cx, cy) in existing:
+            continue
+        iid = pick_item_for_floor(self)
+        self.doc.chests.append({'x': cx, 'y': cy, 'iid': iid})
+        existing.add((cx, cy))
+        placed += 1
+        if placed >= limit:
+            break
+    if placed:
+        self.status = f'Placed {placed} treasure(s)'
+    else:
+        self.status = 'No new treasure placed'
+
+
+def generate_theme(self: 'Editor'):
+    monsters = getattr(self, 'monsters', []) or []
+    themes: Dict[str, Dict[str, Any]] = {}
+    for m in monsters:
+        if not isinstance(m, dict):
+            continue
+        theme_id = str(m.get('theme', m.get('archetype', 'general'))).lower()
+        themes.setdefault(theme_id, {'monsters': []})['monsters'].append(m)
+    if not themes:
+        self.status = 'No monster data available for theming'
+        return
+    theme_id, theme_data = random.choice(list(themes.items()))
+
+    quest_id = None
+    npc_id = None
+    quest_map = {str(q.get('id')): q for q in getattr(self, 'quests', []) if isinstance(q, dict) and q.get('id')}
+    npc_pool = [npc for npc in getattr(self, 'npc_defs', []) if isinstance(npc, dict) and npc.get('quest_id') and npc.get('quest_id') in quest_map]
+    themed_npcs = [npc for npc in npc_pool if str(npc.get('quest_id', '')).lower().startswith(theme_id)]
+    pick_pool = themed_npcs or npc_pool
+    if pick_pool:
+        pick = random.choice(pick_pool)
+        npc_id = str(pick.get('id'))
+        quest_id = str(pick.get('quest_id'))
+
+    themed_monster_ids = [str(m.get('id')) for m in theme_data['monsters'] if m.get('id')]
+    if themed_monster_ids:
+        self.doc.encounters['monsters'] = themed_monster_ids
+        max_group = max(1, min(4, len(themed_monster_ids)))
+        self.doc.encounters['group'] = [1, max_group]
+    else:
+        self.doc.encounters['monsters'] = []
+        self.doc.encounters['group'] = [1, 1]
+
+    grid = self.doc.grid
+    empty_slots = [(x, y) for y in range(1, H - 1) for x in range(1, W - 1) if grid[y][x] == T_EMPTY]
+
+    self.doc.elites = []
+    self.doc.npcs = []
+    self.doc.quest_id = None
+
+    elite_spot = None
+    npc_spot = None
+    def has_open_square(cx: int, cy: int) -> bool:
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                nx, ny = cx + dx, cy + dy
+                if not (0 <= nx < W and 0 <= ny < H):
+                    return False
+                if grid[ny][nx] != T_EMPTY:
+                    return False
+        return True
+
+    random.shuffle(empty_slots)
+    for x, y in empty_slots:
+        if has_open_square(x, y):
+            elite_spot = (x, y)
+            break
+    if elite_spot is None and empty_slots:
+        elite_spot = empty_slots[0]
+    if elite_spot:
+        ex, ey = elite_spot
+        elite_candidates = [m for m in theme_data['monsters'] if str(m.get('tier', '')).lower() == 'elite']
+        elite = random.choice(elite_candidates) if elite_candidates else random.choice(theme_data['monsters']) if theme_data['monsters'] else None
+        if elite:
+            self.doc.elites = [{'x': ex, 'y': ey, 'id': elite.get('id'), 'pattern': 'up_down'}]
+
+    for x, y in empty_slots:
+        if (x, y) == elite_spot:
+            continue
+        if has_open_square(x, y):
+            npc_spot = (x, y)
+            break
+    if npc_spot is None and empty_slots:
+        for x, y in empty_slots:
+            if (x, y) != elite_spot:
+                npc_spot = (x, y)
+                break
+    if npc_spot and npc_id:
+        nx, ny = npc_spot
+        self.doc.npcs = [{'x': nx, 'y': ny, 'id': npc_id}]
+    else:
+        self.doc.npcs = []
+
+    if quest_id:
+        self.doc.quest_id = quest_id
+
+    self.status = f"Applied theme '{theme_id}'"
 
 if __name__ == '__main__':
     idx = 0
