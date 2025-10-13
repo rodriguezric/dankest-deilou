@@ -5565,13 +5565,16 @@ class Game:
                     if m.exp >= 100:
                         m.exp -= 100
                         m.level += 1
-                        gain = random.randint(2, 6)
+                        hp_mod = max(2, m.vit // 2)
+                        gain = random.randint(2, hp_mod)
                         m.max_hp += gain
                         m.hp = m.max_hp
-                        if m.cls in ("Mage", "Priest"):
-                            m.max_mp += 1
-                            m.mp = m.max_mp
-                        self.log.add(f"{m.name} reached Lv{m.level}! +{gain} HP")
+                        prev_max_mp = m.max_mp
+                        mp_mod = max(2, m.iq // 2)
+                        mp_gain = random.randint(1, mp_mod)
+                        m.max_mp = prev_max_mp + mp_gain
+                        m.mp = m.max_mp
+                        self.log.add(f"{m.name} reached Lv{m.level}! +{gain} HP, +{mp_gain} MP")
                         # Every 2 levels starting at 3 (3,5,7,...) grant a bonus trait
                         if m.level >= 3 and (m.level % 2 == 1):
                             self.start_trait_selection(self.training_index, return_mode=MODE_TRAINING)
