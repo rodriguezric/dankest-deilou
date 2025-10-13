@@ -3523,6 +3523,7 @@ class Game:
         self.combat_intro_done_triggered: bool = False
 
         self.menu_index = 0
+        self.form_index = 0
         self.create_state = {"step": 0, "name": "", "class_ix": 0}
         self.create_confirm_index = 0
         # Shop UI state
@@ -4071,6 +4072,7 @@ class Game:
         self.log.add("Game loaded.")
         # After loading, ensure town menu starts at the top choice
         self.menu_index = 0
+        self.form_index = 0
 
     
     def draw_title(self):
@@ -4574,6 +4576,7 @@ class Game:
             self.party_mode = 'menu'  # auto-open menu
             self.party_actions_index = 0
         elif ix == 1:
+            self.form_index = 0
             self.mode = MODE_FORM
         elif ix == 2:
             self.return_mode = MODE_TOWN
@@ -4830,7 +4833,7 @@ class Game:
         self.r.text_big(view, "Form Party (max 4)", (20, 16))
         y = 50
         for i, m in enumerate(self.party.members):
-            sel = "> " if i == self.menu_index else "  "
+            sel = "> " if i == self.form_index else "  "
             mark = "[*]" if i in self.party.active else "[ ]"
             dead = not (m.alive and m.hp > 0)
             color = GRAY if dead else WHITE
@@ -4841,14 +4844,16 @@ class Game:
     def form_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.menu_index = (self.menu_index - 1) % max(1, len(self.party.members))
+                n = max(1, len(self.party.members))
+                self.form_index = (self.form_index - 1) % n
                 self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.menu_index = (self.menu_index + 1) % max(1, len(self.party.members))
+                n = max(1, len(self.party.members))
+                self.form_index = (self.form_index + 1) % n
                 self.sfx.play('ui_move', 0.5)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self.sfx.play('ui_select', 0.6)
-                i = self.menu_index
+                i = self.form_index
                 if i < len(self.party.members):
                     if i in self.party.active:
                         self.party.active.remove(i)
