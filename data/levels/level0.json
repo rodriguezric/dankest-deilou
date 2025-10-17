@@ -670,12 +670,6 @@
       "y": 2,
       "id": "goblin_chief",
       "pattern": "up_down"
-    },
-    {
-      "x": 1,
-      "y": 2,
-      "id": "vampire",
-      "pattern": "up_down"
     }
   ],
   "stairs_down": [
