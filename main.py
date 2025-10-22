@@ -3769,6 +3769,8 @@ class Game:
     def on_mode_changed(self, old_mode: Optional[str], new_mode: str):
         # Crossfade between town and labyrinth; immediate start for battle; fade out on victory.
         # Intercept town <-> maze transitions to run a longer fade-to-black scene transition
+        if new_mode == MODE_TOWN:
+            self.reset_threat_meter()
         if (old_mode in (MODE_TOWN, MODE_MAZE)) and (new_mode in (MODE_TOWN, MODE_MAZE)):
             # Start visual transition
             # Longer timings to make the fade more noticeable
@@ -6074,6 +6076,12 @@ class Game:
         # Draw from bottom up
         if filled > 0:
             pygame.draw.rect(view, col, (x + 2, y + h - filled + 2, w - 4, filled - 4))
+
+    def reset_threat_meter(self):
+        self.threat = 0
+        self.threat_full_steps = 0
+        self.threat_flash_active = False
+        self.threat_flash_t0 = 0
 
     def draw_floor_indicator(self):
         # Top-left label showing current floor (1-based) with position and facing under it
