@@ -27,7 +27,7 @@ import pygame
 
 # ------------------------------ Constants ----------------------------------
 WIDTH, HEIGHT = 960, 600
-VIEW_H = 440
+VIEW_H = HEIGHT
 LOG_H = HEIGHT - VIEW_H
 FPS = 60
 FONT_NAME = None
@@ -820,7 +820,6 @@ class Renderer:
     def draw_frame(self):
         self.screen.fill(DARK)
         pygame.draw.rect(self.screen, (30, 30, 34), (0, 0, WIDTH, VIEW_H))
-        pygame.draw.rect(self.screen, (28, 28, 32), (0, VIEW_H, WIDTH, LOG_H))
 
     def text(self, surf, txt, pos, color=WHITE, aa=True):
         surf.blit(self.font.render(txt, aa, color), pos)
@@ -832,6 +831,8 @@ class Renderer:
         surf.blit(self.font_big.render(txt, aa, color), pos)
 
     def draw_log(self, log_lines: List[str]):
+        if LOG_H <= 0:
+            return
         panel = self.screen.subsurface(pygame.Rect(0, VIEW_H, WIDTH, LOG_H))
         y = 6
         for ln in log_lines[-10:]:
@@ -1178,7 +1179,7 @@ class Renderer:
                                       spread_deg=spread_deg, steps=12, edge_alpha=edge_alpha)
 
     # ---- Generic centered menu (no header) ----
-    def draw_center_menu(self, options: List[str], selected: int):
+    def draw_center_menu(self, options: List[str], selected: int, center_y: Optional[float] = None, min_top: Optional[int] = None, max_bottom: Optional[int] = None):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         if not options:
             return pygame.Rect(0, 0, 0, 0)
@@ -1188,7 +1189,14 @@ class Renderer:
         w = text_w + pad_x * 2
         h = text_h * len(options) + pad_y * 2
         x = WIDTH // 2 - w // 2
-        y = VIEW_H // 2 - h // 2
+        if center_y is None:
+            center_y = VIEW_H / 2
+        y = int(center_y - h / 2)
+        if min_top is not None:
+            y = max(min_top, y)
+        if max_bottom is not None:
+            y = min(max_bottom - h, y)
+        y = max(0, min(VIEW_H - h, y))
         rect = pygame.Rect(x, y, w, h)
         pygame.draw.rect(view, (16, 16, 20), rect)
         pygame.draw.rect(view, YELLOW, rect, 2)
@@ -1201,7 +1209,7 @@ class Renderer:
         return rect
 
     # ---- Combat HUDs ----
-    def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None, offsets: Dict[int, int] = None, offsets_x: Dict[int, int] = None) -> Dict[int, pygame.Rect]:
+    def draw_combat_party_windows(self, party: "Party", effects: "HitEffects", highlight: set = None, acting: set = None, offsets: Dict[int, int] = None, offsets_x: Dict[int, int] = None, base_y: Optional[int] = None) -> Dict[int, pygame.Rect]:
         highlight = highlight or set()
         acting = acting or set()
         offsets = offsets or {}
@@ -1216,16 +1224,21 @@ class Renderer:
         h = 60
         total = n * w + (n + 1) * gap
         x = (WIDTH - total) // 2 + gap
-        y = VIEW_H - h - 16
+        if base_y is None:
+            base_y = VIEW_H - h - 16
+        y = int(base_y)
         rects: Dict[int, pygame.Rect] = {}
         for i, m in enumerate(members):
             try:
                 gi = party.members.index(m)
             except ValueError:
                 gi = i
+            alive = getattr(m, 'alive', True) and getattr(m, 'hp', 0) > 0
             (ox, oy), hit_color = effects.sample("party", gi, base_color=WHITE)
             border_col = hit_color
-            if border_col == WHITE:
+            if not alive:
+                border_col = RED
+            elif border_col == WHITE:
                 now = pygame.time.get_ticks()
                 if gi in acting and (now // 120) % 2 == 0:
                     border_col = YELLOW
@@ -1238,9 +1251,11 @@ class Renderer:
             pygame.draw.rect(view, (20, 20, 28), rect)
             pygame.draw.rect(view, border_col, rect, 2)
             name = m.name[:14]
-            self.text(view, name, (rx + 8, ry + 6), border_col)
-            self.text_small(view, f"HP {m.hp}/{m.max_hp}", (rx + 8, ry + 26), WHITE)
-            self.text_small(view, f"MP {m.mp}/{m.max_mp}", (rx + w // 2 + 8, ry + 26), WHITE)
+            name_color = border_col if not alive else border_col
+            self.text(view, name, (rx + 8, ry + 6), name_color)
+            stat_color = WHITE if alive else RED
+            self.text_small(view, f"HP {m.hp}/{m.max_hp}", (rx + 8, ry + 26), stat_color)
+            self.text_small(view, f"MP {m.mp}/{m.max_mp}", (rx + w // 2 + 8, ry + 26), stat_color)
             # Status stacks at bottom
             stacks: List[Tuple[str, Tuple[int, int, int]]] = []
             order = ['bleed', 'vamp', 'poison', 'regen', 'reassemble', 'blink', 'blind', 'vulnerable', 'weak', 'stun']
@@ -1262,7 +1277,7 @@ class Renderer:
             rects[gi] = rect
         return rects
 
-    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None, dying: Dict[int, float] = None, offsets: Dict[int, int] = None, offsets_x: Dict[int, int] = None, rotations: Dict[int, float] = None) -> Dict[int, pygame.Rect]:
+    def draw_combat_enemy_windows(self, enemies: List["Enemy"], effects: "HitEffects", highlight: set = None, acting: set = None, dying: Dict[int, float] = None, offsets: Dict[int, int] = None, offsets_x: Dict[int, int] = None, rotations: Dict[int, float] = None, base_y: int = 28) -> Dict[int, pygame.Rect]:
         highlight = highlight or set()
         acting = acting or set()
         dying = dying or {}
@@ -1288,8 +1303,8 @@ class Renderer:
         h = 60
         total = n * w + (n + 1) * gap
         x = (WIDTH - total) // 2 + gap
-        # Slightly lower enemy windows for better composition
-        y = 28
+        # Position enemy HUD starting row using caller-provided baseline (already accounting for message window)
+        y = max(0, base_y)
         rects: Dict[int, pygame.Rect] = {}
         for j, (i, e) in enumerate(draw_list):
             (ox, oy), hit_color = effects.sample("enemy", i, base_color=WHITE)
@@ -1375,8 +1390,9 @@ class Renderer:
 class MessageLog:
     def __init__(self):
         self.lines: List[str] = ["Welcome to the Labyrinth of Trials."]
-        self._queue: List[str] = []
+        self._queue: List[Dict[str, Any]] = []
         self._current: str = ""
+        self._current_entry: Optional[Dict[str, Any]] = None
         self._reveal_chars: int = 0
         self._last_tick: int = pygame.time.get_ticks()
         # chars per second; tune for comfortable reading (slower)
@@ -1385,14 +1401,75 @@ class MessageLog:
         self._sfx: Optional[SfxManager] = None
         self._typer_last_ms: int = 0
         self._typer_interval_ms: int = 45
+        # window message tracking
+        self._active_line: Optional[str] = None
+        self._last_line: str = ""
+        self._linger_ms: int = 1100
+        self._linger_until: int = 0
+        self._wait_for_ack: bool = False
+        self.require_ack: bool = False
+        self._token_lines: Dict[int, int] = {}
+        self._pending_suffix_map: Dict[int, str] = {}
+        self._next_token_id: int = 1
+
+    def _complete_current(self, now: int):
+        if not self._current:
+            return
+        self.lines.append(self._current)
+        self._last_line = self._current
+        self._current = ""
+        self._reveal_chars = 0
+        if self.require_ack:
+            self._wait_for_ack = True
+            self._active_line = self._last_line
+            self._linger_until = 0
+        else:
+            self._linger_until = now + self._linger_ms
+            self._active_line = self._last_line
+        token = None
+        if self._current_entry:
+            token = self._current_entry.get('token')
+        if token is not None:
+            entry = self._current_entry or {}
+            if entry.get('is_suffix'):
+                self.release_token(token)
+            else:
+                self._token_lines[token] = len(self.lines) - 1
+                pending = self._pending_suffix_map.pop(token, None)
+                if pending:
+                    status = self.append_suffix(pending, token)
+                    if status == 'applied':
+                        self.release_token(token)
+        self._current_entry = None
+
+    def _enqueue(self, txt: str, token: Optional[int] = None):
+        entry = {'text': str(txt), 'token': token, 'is_suffix': False}
+        self._queue.append(entry)
+        return entry
 
     def add(self, txt: str):
-        # queue text to be revealed with typewriter effect
-        self._queue.append(txt)
+        self._enqueue(txt, None)
 
-    def _advance_queue(self):
-        if not self._current and self._queue:
-            self._current = self._queue.pop(0)
+    def add_pretext(self, txt: str) -> int:
+        token = self._next_token_id
+        self._next_token_id += 1
+        self._enqueue(txt, token)
+        return token
+
+    def _advance_queue(self, now: int):
+        if self._current:
+            return
+        if self.require_ack and self._wait_for_ack:
+            return
+        if (not self.require_ack) and now < self._linger_until:
+            return
+        if self._queue:
+            entry = self._queue.pop(0)
+            if isinstance(entry, str):
+                entry = {'text': entry, 'token': None, 'is_suffix': False}
+            self._current_entry = entry
+            self._current = entry.get('text', '')
+            self._active_line = self._current
             self._reveal_chars = 0
 
     def update(self):
@@ -1400,7 +1477,7 @@ class MessageLog:
         now = pygame.time.get_ticks()
         dt = max(0, now - self._last_tick)
         self._last_tick = now
-        self._advance_queue()
+        self._advance_queue(now)
         if self._current:
             add_chars = int(self._cps * (dt / 1000.0))
             if add_chars > 0:
@@ -1416,11 +1493,12 @@ class MessageLog:
                         self._typer_last_ms = now
                 if self._reveal_chars >= len(self._current):
                     # push finished line into history, reset current
-                    self.lines.append(self._current)
-                    self._current = ""
-                    self._reveal_chars = 0
-                    # small delay before next line begins revealing
-                    # by leaving update until next frame to pull from queue
+                    self._complete_current(now)
+        elif not self.require_ack:
+            if self._active_line and now >= self._linger_until and not self._queue:
+                self._active_line = None
+                self._linger_until = 0
+        # when ack required, keep active line visible until acknowledged
 
     def set_sfx(self, sfx: "SfxManager"):
         self._sfx = sfx
@@ -1430,6 +1508,118 @@ class MessageLog:
         if self._current and self._reveal_chars > 0:
             return self.lines + [self._current[: self._reveal_chars]]
         return self.lines
+
+    def active_text(self) -> Optional[str]:
+        if self._current:
+            if self._reveal_chars > 0:
+                return self._current[: self._reveal_chars]
+            return ""
+        if self._wait_for_ack and self._active_line:
+            return self._active_line
+        if not self.require_ack and self._active_line and pygame.time.get_ticks() < self._linger_until:
+            return self._active_line
+        return None
+
+    def is_typing(self) -> bool:
+        return bool(self._current)
+
+    def has_pending(self) -> bool:
+        return bool(self._queue)
+
+    def extend_last(self, extra: str) -> bool:
+        if not extra:
+            return False
+        extra = str(extra)
+        if self._current:
+            self._current += extra
+            self._last_line = self._current
+            return True
+        if self.lines:
+            self.lines[-1] = self.lines[-1] + extra
+            self._last_line = self.lines[-1]
+            self._active_line = self.lines[-1]
+            return True
+        return False
+
+    def append_suffix(self, suffix: str, token: Optional[int] = None) -> Optional[str]:
+        if not suffix:
+            return None
+        suffix = str(suffix)
+        if token is not None:
+            if self._current_entry and self._current_entry.get('token') == token:
+                self._pending_suffix_map[token] = self._pending_suffix_map.get(token, '') + suffix
+                return 'pending'
+            idx = self._token_lines.get(token)
+            if idx is not None and 0 <= idx < len(self.lines):
+                base = self.lines.pop(idx)
+                combined = base + suffix
+                entry = {'text': combined, 'token': token, 'is_suffix': True}
+                self._current_entry = entry
+                self._current = combined
+                self._reveal_chars = len(base)
+                self._active_line = combined
+                self._last_line = combined
+                self._token_lines[token] = None
+                self._pending_suffix_map.pop(token, None)
+                return 'typing'
+            # token not yet available; queue for later
+            self._pending_suffix_map[token] = self._pending_suffix_map.get(token, '') + suffix
+            return 'pending'
+        if self.lines:
+            base = self.lines.pop()
+            combined = base + suffix
+            entry = {'text': combined, 'token': None, 'is_suffix': True}
+            self._current_entry = entry
+            self._current = combined
+            self._reveal_chars = len(base)
+            self._active_line = combined
+            self._last_line = combined
+            if token is not None:
+                self._pending_suffix_map.pop(token, None)
+            return 'typing'
+        return None
+
+    def release_token(self, token: int):
+        self._token_lines.pop(token, None)
+        self._pending_suffix_map.pop(token, None)
+
+    def needs_ack(self) -> bool:
+        return self.require_ack and self._wait_for_ack
+
+    def acknowledge(self):
+        if not self._wait_for_ack:
+            return
+        self._wait_for_ack = False
+        self._active_line = None
+        self._linger_until = 0
+
+    def fast_forward(self):
+        if self._current:
+            self._reveal_chars = len(self._current)
+            self._complete_current(pygame.time.get_ticks())
+
+    def is_blocking(self) -> bool:
+        if not self.require_ack:
+            return False
+        return bool(self._current) or self._wait_for_ack
+
+    def last_line(self) -> str:
+        if self._current:
+            if self._reveal_chars > 0:
+                return self._current[: self._reveal_chars]
+            return self._current
+        if self._last_line:
+            return self._last_line
+        if self.lines:
+            return self.lines[-1]
+        return ""
+
+    def set_require_ack(self, flag: bool):
+        if self.require_ack == flag:
+            return
+        self.require_ack = flag
+        if not self.require_ack and self._wait_for_ack:
+            self.acknowledge()
 
 
 # ------------------------------ Battle -------------------------------------
@@ -1957,11 +2147,14 @@ class Battle:
                 gi = self.party.members.index(t)
                 hit = random.random() < 0.65
                 dmg = random.randint(e.atk_low, e.atk_high)
+                pre = f"{e.name} attacks {t.name}"
                 act = {
                     'type': 'attack',
                     'actor_side': 'enemy', 'actor_index': ix,
                     'target_side': 'party', 'target_index': gi,
-                    'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                    'hit': hit, 'dmg': dmg,
+                    'pretext': pre,
+                    'label': f"{e.name} hits {t.name} for {dmg}.",
                     'miss_label': f"{e.name} misses {t.name}.",
                 }
             self.start_animation(act)
@@ -2000,9 +2193,12 @@ class Battle:
             if r < 0.7:
                 hit = random.random() < 0.65
                 dmg = random.randint(e.atk_low, e.atk_high)
+                pre = f"{e.name} slashes at {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} slashes at {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} hits {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
             else:
                 return {'type': 'kobold_poison_dart', 'actor_side': 'enemy', 'actor_index': ix,
@@ -2012,9 +2208,12 @@ class Battle:
             if random.random() < 0.5:
                 hit = random.random() < 0.65
                 dmg = random.randint(e.atk_low, e.atk_high)
+                pre = f"{e.name} claws at {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} claws at {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} hits {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
             hit = random.random() < 0.6
             dmg = random.randint(max(1, e.atk_low - 1), max(e.atk_low, e.atk_high))
@@ -2062,23 +2261,27 @@ class Battle:
             if random.random() < 0.6:
                 hit = random.random() < 0.72
                 dmg = random.randint(e.atk_low, e.atk_high + 1)
+                pre = f"{e.name} bites deeply into {bite_target.name}"
                 return {
                     'type': 'attack',
                     'actor_side': 'enemy', 'actor_index': ix,
                     'target_side': 'party', 'target_index': bite_gi,
                     'hit': hit, 'dmg': dmg,
-                    'label': f"{e.name} bites deeply into {bite_target.name}!",
+                    'pretext': pre,
+                    'label': f"{e.name} drains {bite_target.name} for {dmg}.",
                     'miss_label': f"{bite_target.name} dodges the fangs!",
                     'apply_vamp': 3
                 }
             hit = random.random() < 0.68
             dmg = random.randint(e.atk_low, e.atk_high + 1)
+            pre = f"{e.name} slashes at {t.name}"
             return {
                 'type': 'attack',
                 'actor_side': 'enemy', 'actor_index': ix,
                 'target_side': 'party', 'target_index': gi,
                 'hit': hit, 'dmg': dmg,
-                'label': f"{e.name} slashes at {t.name}",
+                'pretext': pre,
+                'label': f"{e.name} hits {t.name} for {dmg}.",
                 'miss_label': f"{e.name} misses {t.name}."
             }
         if mid == 'skeleton':
@@ -2086,15 +2289,21 @@ class Battle:
             if r < 0.7:
                 hit = random.random() < 0.68
                 dmg = random.randint(e.atk_low, e.atk_high)
+                pre = f"{e.name} slashes at {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} slashes at {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} hits {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
             hit = random.random() < 0.7
             dmg = random.randint(e.atk_low + 1, e.atk_high + 2)
+            pre = f"{e.name} swings Bone Bash at {t.name}"
             return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                     'target_side': 'party', 'target_index': gi,
-                    'hit': hit, 'dmg': dmg, 'label': f"{e.name} smashes {t.name} with Bone Bash!",
+                    'hit': hit, 'dmg': dmg,
+                    'pretext': pre,
+                    'label': f"{e.name}'s Bone Bash hits {t.name} for {dmg}.",
                     'miss_label': f"{e.name}'s Bone Bash whiffs past {t.name}.",
                     'bone_bash': True}
         if mid == 'bone_pile':
@@ -2113,9 +2322,12 @@ class Battle:
                 # Attack
                 hit = random.random() < 0.65
                 dmg = random.randint(e.atk_low, e.atk_high)
+                pre = f"{e.name} lunges at {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} bites {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
             elif r < 0.9:
                 # Chitter (emote)
@@ -2135,14 +2347,19 @@ class Battle:
             if random.random() < 0.5:
                 hit = True  # slime attacks always hit for simplicity
                 dmg = max(1, e.atk_low)
+                pre = f"{e.name} sloshes into {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} splashes {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
             else:
                 # Pulse prepares Splash next turn
+                pre = f"{e.name} pulses eerily..."
                 return {'type': 'pulse', 'actor_side': 'enemy', 'actor_index': ix,
-                        'label': f"{e.name} pulses eerily..."}
+                        'pretext': pre,
+                        'result_suffix': ' '}
         # Slime Mind (elite)
         if mid == 'slime_mind':
             # If there are allied slimes, command them to splash.
@@ -2162,9 +2379,12 @@ class Battle:
             else:
                 hit = True
                 dmg = max(1, e.atk_low)
+                pre = f"{e.name} lashes out at {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} lashes out at {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} hits {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
         # The Censor (elite)
         if mid == 'the_censor':
@@ -2210,9 +2430,12 @@ class Battle:
             else:
                 hit = random.random() < 0.65
                 dmg = random.randint(e.atk_low, e.atk_high)
+                pre = f"{e.name} strikes {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} strikes {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} hits {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
         # Goblin
         if mid == 'goblin':
@@ -2229,25 +2452,33 @@ class Battle:
                 if r < 0.7:
                     hit = random.random() < 0.65
                     dmg = random.randint(e.atk_low, e.atk_high)
+                    pre = f"{e.name} charges {t.name}"
                     return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                             'target_side': 'party', 'target_index': gi,
-                            'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                            'hit': hit, 'dmg': dmg,
+                            'pretext': pre,
+                            'label': f"{e.name} hits {t.name} for {dmg}.",
                             'miss_label': f"{e.name} misses {t.name}."}
                 else:
                     return {'type': 'trip', 'actor_side': 'enemy', 'actor_index': ix,
-                            'label': f"{e.name} loses its footing and trips!"}
+                            'pretext': '',
+                            'result_line': f"{e.name} loses its footing and trips!"}
             # Default: mostly attack, sometimes trip/steal, rarely run
             if r < 0.6:
                 hit = random.random() < 0.65
                 dmg = random.randint(e.atk_low, e.atk_high)
+                pre = f"{e.name} swings at {t.name}"
                 return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                         'target_side': 'party', 'target_index': gi,
-                        'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                        'hit': hit, 'dmg': dmg,
+                        'pretext': pre,
+                        'label': f"{e.name} hits {t.name} for {dmg}.",
                         'miss_label': f"{e.name} misses {t.name}."}
             elif r < 0.8:
                 # Trip
                 return {'type': 'trip', 'actor_side': 'enemy', 'actor_index': ix,
-                        'label': f"{e.name} loses its footing and trips!"}
+                        'pretext': '',
+                        'result_line': f"{e.name} loses its footing and trips!"}
             elif r < 0.95 and not self.goblin_steal_used.get(ix):
                 return {'type': 'steal', 'actor_side': 'enemy', 'actor_index': ix,
                         'label': f"{e.name} eyes your belongings..."}
@@ -2290,16 +2521,22 @@ class Battle:
             # Otherwise, attack
             hit = random.random() < 0.7
             dmg = random.randint(e.atk_low + 1, e.atk_high + 2)
+            pre = f"{e.name} strikes {t.name}"
             return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                     'target_side': 'party', 'target_index': gi,
-                    'hit': hit, 'dmg': dmg, 'label': f"{e.name} strikes {t.name}",
+                    'hit': hit, 'dmg': dmg,
+                    'pretext': pre,
+                    'label': f"{e.name} hits {t.name} for {dmg}.",
                     'miss_label': f"{e.name} misses {t.name}."}
         # Fallback: attack
         hit = random.random() < 0.65
         dmg = random.randint(e.atk_low, e.atk_high)
+        pre = f"{e.name} attacks {t.name}"
         return {'type': 'attack', 'actor_side': 'enemy', 'actor_index': ix,
                 'target_side': 'party', 'target_index': gi,
-                'hit': hit, 'dmg': dmg, 'label': f"{e.name} attacks {t.name}",
+                'hit': hit, 'dmg': dmg,
+                'pretext': pre,
+                'label': f"{e.name} hits {t.name} for {dmg}.",
                 'miss_label': f"{e.name} misses {t.name}."}
 
     def advance_turn(self):
@@ -2448,17 +2685,203 @@ class Battle:
         if action.get('type') in ('backstab',):
             # fade/teleport feel: longer pre, then impact
             self.anim['dur'] = [200, 420, 240, 200]
+        pretext = self._format_action_pretext(action)
+        if pretext:
+            token = self.log.add_pretext(pretext)
+            action['_log_token'] = token
+            # Small delay before windup to let pretext finish
+            self.anim['t0'] += max(0, int(len(pretext) * (1000.0 / max(1.0, self.log._cps))))
+        else:
+            action.pop('_log_token', None)
         self.state = 'anim'
 
     def add_floater(self, side: str, index: int, text: str, dur: int = 700, color=WHITE):
         self.floaters.append({'side': side, 'index': index, 'text': text, 'start': pygame.time.get_ticks(), 'dur': dur, 'color': color})
 
+    def _actor_name(self, side: Optional[str], index: Optional[int]) -> str:
+        if side == 'party' and isinstance(index, int) and 0 <= index < len(self.party.members):
+            return self.party.members[index].name
+        if side == 'enemy' and isinstance(index, int) and 0 <= index < len(self.enemies):
+            return self.enemies[index].name
+        return "Someone"
+
+    def _target_name(self, side: Optional[str], index: Optional[int]) -> str:
+        if side == 'party' and isinstance(index, int) and 0 <= index < len(self.party.members):
+            return self.party.members[index].name
+        if side == 'enemy' and isinstance(index, int) and 0 <= index < len(self.enemies):
+            return self.enemies[index].name
+        return "their target"
+
+    def _format_action_pretext(self, act: Dict[str, Any]) -> Optional[str]:
+        a_type = act.get('type')
+        skill_attack_types = {'sunder', 'rush', 'combo', 'backstab'}
+        pre = act.get('pretext')
+        if isinstance(pre, str) and pre:
+            return pre
+        label = act.get('label')
+        if isinstance(label, str) and label and ' for ' not in label:
+            return label.rstrip(' .!')
+        actor = self._actor_name(act.get('actor_side'), act.get('actor_index'))
+        target = self._target_name(act.get('target_side'), act.get('target_index'))
+        if a_type == 'attack':
+            return f"{actor} attacks {target}"
+        if a_type == 'spell':
+            spell = act.get('spell_name') or act.get('spell_id')
+            if isinstance(spell, str) and spell:
+                spell_readable = spell.replace('_', ' ').title()
+                return f"{actor} casts {spell_readable} at {target}"
+            return f"{actor} casts a spell at {target}"
+        if a_type in skill_attack_types:
+            skill_name = act.get('skill_name') or a_type.title()
+            return f"{actor} uses {skill_name} on {target}"
+        return None
+
+    def _normalize_miss_suffix(self, text: str, actor: str) -> str:
+        stripped = str(text or '').strip()
+        if not stripped:
+            return 'misses.'
+        actor_lower = actor.lower()
+        stripped_lower = stripped.lower()
+        if stripped_lower.startswith(actor_lower):
+            stripped = stripped[len(actor):].lstrip()
+        end_char = ''
+        if stripped and stripped[-1] in '.!?':
+            end_char = stripped[-1]
+            stripped = stripped[:-1]
+        stripped = stripped.strip()
+        if stripped:
+            if stripped[0].isupper():
+                stripped = stripped[0].lower() + stripped[1:]
+        else:
+            stripped = 'misses'
+        if not end_char:
+            end_char = '.'
+        return stripped + end_char
+
+    def _format_attack_suffix(self, act: Dict[str, Any]) -> Optional[str]:
+        a_type = act.get('type')
+        if a_type not in ('attack', 'spell', 'sunder', 'rush', 'combo', 'backstab'):
+            return None
+        actor = self._actor_name(act.get('actor_side'), act.get('actor_index'))
+        hit = bool(act.get('hit', False))
+        if hit:
+            dmg = act.get('dmg')
+            if dmg is not None:
+                if a_type == 'spell':
+                    return f", dealing {int(dmg)} damage."
+                return f" and hits for {int(dmg)} damage."
+            return " and it hits."
+        miss_label = act.get('miss_label')
+        if miss_label:
+            normalized = self._normalize_miss_suffix(miss_label, actor)
+            return f" but {normalized}"
+        return " but misses."
+
+    def _format_attack_final_line(self, act: Dict[str, Any]) -> str:
+        pretext = self._format_action_pretext(act)
+        suffix = self._format_attack_suffix(act)
+        if pretext and suffix:
+            return pretext + suffix
+        if act.get('hit', False):
+            return act.get('label', 'A hit lands.')
+        return act.get('miss_label', 'The attack misses.')
+
+    def _log_primary_attack_outcome(self, act: Dict[str, Any]):
+        suffix = self._format_attack_suffix(act)
+        if suffix:
+            act['_result_suffix'] = suffix
+            act.pop('_result_line', None)
+            return
+        final_line = self._format_attack_final_line(act)
+        if final_line:
+            act['_result_line'] = final_line
+
+    def _flush_action_text(self, act: Dict[str, Any]):
+        if act.get('_text_flushed'):
+            return
+        act['_text_flushed'] = True
+        suffix = act.pop('_result_suffix', None)
+        if suffix is None:
+            suffix = act.pop('result_suffix', None)
+        line = act.pop('_result_line', None)
+        if line is None:
+            line = act.pop('result_text', None)
+        token = act.get('_log_token')
+        suffix_pending = False
+        if suffix:
+            status = self.log.append_suffix(suffix, token)
+            if status:
+                if status == 'applied':
+                    line = None
+                elif status == 'pending':
+                    return
+                elif status == 'typing':
+                    line = None
+                    suffix_pending = True
+            else:
+                if not line:
+                    line = self._format_attack_final_line(act)
+        if line:
+            self.log.add(line)
+        stacks = act.pop('_pending_stacks', [])
+        for side, op, idx, status, amount in stacks:
+            try:
+                if side == 'enemy':
+                    if not (0 <= idx < len(self.enemies)):
+                        continue
+                    target = self.enemies[idx]
+                    if getattr(target, 'hp', 0) <= 0:
+                        continue
+                else:
+                    if not (0 <= idx < len(self.party.members)):
+                        continue
+                    target = self.party.members[idx]
+                    if not (getattr(target, 'alive', True) and getattr(target, 'hp', 0) > 0):
+                        continue
+                if op == 'add':
+                    self._status_add(side, idx, status, amount)
+                elif op == 'set':
+                    self._status_set(side, idx, status, amount)
+                elif op == 'dec':
+                    self._status_dec(side, idx, status, amount)
+            except Exception:
+                continue
+        floats = act.pop('_pending_floaters', [])
+        for side, idx, text, dur, color in floats:
+            try:
+                if side == 'enemy':
+                    if not (0 <= idx < len(self.enemies)):
+                        continue
+                    target = self.enemies[idx]
+                    if getattr(target, 'hp', 0) <= 0:
+                        continue
+                else:
+                    if not (0 <= idx < len(self.party.members)):
+                        continue
+                    target = self.party.members[idx]
+                    if not (getattr(target, 'alive', True) and getattr(target, 'hp', 0) > 0):
+                        continue
+                self.add_floater(side, idx, text, dur, color)
+            except Exception:
+                continue
+        for name in act.pop('_defeated', []):
+            if name:
+                self.log.add(f"{name} was defeated.")
+        if token is not None and not suffix_pending:
+            self.log.release_token(token)
+        act.pop('_log_token', None)
+
     def make_defend_action(self) -> Optional[Dict[str, Any]]:
         gi = self.current_actor_global_ix()
         if gi is None:
             return None
+        actor = self.party.members[gi]
+        pre = f"{actor.name} braces for attack..."
         return {
-            'type': 'defend', 'actor_side': 'party', 'actor_index': gi,
+            'type': 'defend',
+            'actor_side': 'party', 'actor_index': gi,
+            'pretext': pre,
+            'result_suffix': ' '
         }
 
     def make_item_use_action(self, actor: Character, target_gi: int, iid: str) -> Optional[Dict[str, Any]]:
@@ -2501,7 +2924,9 @@ class Battle:
         if actor.mp <= 0:
             return None
         # Map skills into actions
-        if sid in ('sunder','rush','combo','backstab','dust') and target_i is None:
+        if sid in ('sunder','rush','combo','backstab') and target_i is None:
+            return None
+        if sid == 'dust' and target_i is None:
             return None
         if sid in ('flashbang','surge','storm'):
             actor.mp -= 1
@@ -2509,9 +2934,21 @@ class Battle:
         if sid in ('regen','mend'):
             actor.mp -= 1
             return {'type': sid, 'actor_side': 'party', 'actor_index': gi, 'target_side': 'party', 'target_index': target_i}
-        if sid in ('sunder','rush','combo','backstab','dust'):
+        if sid in ('sunder','rush','combo','backstab'):
             actor.mp -= 1
-            return {'type': sid, 'actor_side': 'party', 'actor_index': gi, 'target_side': 'enemy', 'target_index': target_i}
+            enemy_name = self._target_name('enemy', target_i)
+            skill_name = sid.title()
+            pretext = f"{actor.name} uses {skill_name} on {enemy_name}" if enemy_name else None
+            action = {'type': sid, 'actor_side': 'party', 'actor_index': gi,
+                      'target_side': 'enemy', 'target_index': target_i,
+                      'skill_name': skill_name}
+            if pretext:
+                action['pretext'] = pretext
+            return action
+        if sid == 'dust':
+            actor.mp -= 1
+            return {'type': sid, 'actor_side': 'party', 'actor_index': gi,
+                    'target_side': 'enemy', 'target_index': target_i}
         return None
 
     def update(self):
@@ -2550,6 +2987,7 @@ class Battle:
                     a['t0'] = now
                 elif stage == 2 and t >= recover:
                     # finish anim -> small pause, then continue
+                    self._flush_action_text(act)
                     self.anim = None
                     self.next_after_anim = {'actor_side': act['actor_side'], 'type': act.get('type'), 'run_success': act.get('success', False)}
                     self.pause_until = now + self.pause_between_ms
@@ -2570,6 +3008,7 @@ class Battle:
                     a['t0'] = now
                 elif stage == 3 and t >= recover:
                     # finish anim -> small pause, then continue
+                    self._flush_action_text(act)
                     self.anim = None
                     self.next_after_anim = {'actor_side': act['actor_side'], 'type': act.get('type'), 'run_success': act.get('success', False)}
                     self.pause_until = now + self.pause_between_ms
@@ -2582,12 +3021,13 @@ class Battle:
                             self.sfx.play('miss', 0.6)
                     except Exception:
                         pass
-        elif self.state == 'postpause' and now >= self.pause_until:
+        elif self.state == 'postpause':
+            if self.log.is_typing() or self.log.has_pending():
+                return
+            if now < self.pause_until:
+                return
             if self.check_end_and_maybe_finish():
                 return
-            # Mixed initiative: advance to next token
-            na = self.next_after_anim or {}
-            # If player successfully ran, battle ends (handled earlier). Otherwise continue.
             self.advance_turn()
 
     def resolve_action_impact(self, act: Dict[str, Any]):
@@ -2619,7 +3059,8 @@ class Battle:
                         act['hit'] = False
                         self._status_add('enemy', i, 'regen', 3)
                         self.log.add(f"{tgt.name} smiles and absorbs the magic.")
-            if act.get('hit', False):
+            hit = bool(act.get('hit', False))
+            if hit:
                 dmg = max(1, int(act.get('dmg', 1)))
                 # Weak reduces outgoing damage; Vulnerable increases incoming damage
                 a_side = act.get('actor_side'); a_ix = act.get('actor_index')
@@ -2650,7 +3091,9 @@ class Battle:
                         except Exception:
                             pass
                         if self.enemies[i].hp <= 0:
+                            name_def = self.enemies[i].name
                             self.enemies[i].hp = 0
+                            act.setdefault('_defeated', []).append(name_def)
                             # start defeat animation
                             self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
                             self._on_enemy_defeated(i)
@@ -2678,13 +3121,12 @@ class Battle:
                             self.downed_party[gi] = {'start': pygame.time.get_ticks(), 'dur': 600}
                         self.effects.trigger('party', gi, 300, 7)
                         vamp_add = int(act.get('apply_vamp', 0))
-                        if vamp_add > 0:
+                        if vamp_add > 0 and getattr(self.party.members[gi], 'alive', True) and self.party.members[gi].hp > 0:
                             self._status_add('party', gi, 'vamp', vamp_add)
                             self.add_floater('party', gi, 'VAMP', 700, PURPLE)
-                        if act.get('bone_bash') and act.get('hit'):
+                        if act.get('bone_bash') and act.get('hit') and getattr(self.party.members[gi], 'alive', True) and self.party.members[gi].hp > 0:
                             self._status_add('party', gi, 'vulnerable', 1)
                             self.add_floater('party', gi, 'VULN', 700, YELLOW)
-                self.log.add(act.get('label', 'A hit lands.'))
             else:
                 idx = act['target_index']
                 side = act['target_side']
@@ -2693,8 +3135,11 @@ class Battle:
                     self.sfx.play('miss', 0.6)
                 except Exception:
                     pass
-                self.log.add(act.get('miss_label', 'The attack misses.'))
-                if act.get('type') == 'attack' and side == 'enemy':
+            self._log_primary_attack_outcome(act)
+            if not hit and act.get('type') == 'attack':
+                side = act.get('target_side')
+                idx = act.get('target_index')
+                if side == 'enemy':
                     blink_before = self._status_get('enemy', idx, 'blink')
                     if blink_before > 0:
                         self._status_dec('enemy', idx, 'blink', 1)
@@ -2706,6 +3151,7 @@ class Battle:
                         remaining = self._status_get('enemy', idx, 'blink')
                         if act.get('blink_forced') and 0 <= idx < len(self.enemies):
                             self.log.add(f"Mist peels away from {self.enemies[idx].name} ({remaining} Blink).")
+            return
         elif act['type'] == 'vampire_siphon':
             ai = act.get('actor_index', -1)
             vamp_stacks = max(0, int(act.get('vamp_stacks', 0)))
@@ -2936,9 +3382,11 @@ class Battle:
                 snack = self.enemies[ti]
                 if chief.hp > 0 and snack.hp > 0 and snack.id == 'goblin':
                     heal = int(snack.hp)
+                    name_def = snack.name
                     chief.hp = min(getattr(chief, 'max_hp', chief.hp + heal), chief.hp + heal)
                     # kill goblin with a quick fade
                     snack.hp = 0
+                    act.setdefault('_defeated', []).append(name_def)
                     self.dying_enemies[ti] = {'start': pygame.time.get_ticks(), 'dur': 500}
                     self._on_enemy_defeated(ti)
                     self.add_floater('enemy', ai, f"+{heal}", 800, YELLOW)
@@ -2956,7 +3404,9 @@ class Battle:
             dmg = max(1, int(act.get('dmg', 1)))
             # Kill goblin and damage party target
             if 0 <= gix < len(self.enemies):
+                name_def = self.enemies[gix].name
                 self.enemies[gix].hp = 0
+                act.setdefault('_defeated', []).append(name_def)
                 self.dying_enemies[gix] = {'start': pygame.time.get_ticks(), 'dur': 500}
                 self._on_enemy_defeated(gix)
             if 0 <= gi < len(self.party.members):
@@ -3039,7 +3489,6 @@ class Battle:
                 self.party_defending.add(gi)
                 # brief visual cue
                 self.add_floater('party', gi, 'DEFEND', 700, BLUE)
-                self.log.add(f"{self.party.members[gi].name} braces for impact.")
         elif act['type'] == 'heal':
             gi = act['target_index']
             amt = act.get('heal', 0)
@@ -3106,15 +3555,19 @@ class Battle:
             elif act['type'] == 'dust':
                 i = act.get('target_index')
                 if 0 <= i < len(self.enemies):
-                    self._status_add('enemy', i, 'blind', 2)
-                    self.add_floater('enemy', i, 'BLIND', 700, WHITE)
                     self.log.add(f"{self.party.members[a_ix].name} throws dust!")
+                    stacks = act.setdefault('_pending_stacks', [])
+                    stacks.append(('enemy', 'add', i, 'blind', 2))
+                    floats = act.setdefault('_pending_floaters', [])
+                    floats.append(('enemy', i, 'BLIND', 700, WHITE))
             elif act['type'] == 'flashbang':
+                self.log.add(f"{self.party.members[a_ix].name} uses Flashbang!")
+                stacks = act.setdefault('_pending_stacks', [])
+                floats = act.setdefault('_pending_floaters', [])
                 for i, e in enumerate(self.enemies):
                     if e.hp > 0:
-                        self._status_add('enemy', i, 'stun', 1)
-                        self.add_floater('enemy', i, 'STUN', 700, WHITE)
-                self.log.add(f"{self.party.members[a_ix].name} uses Flashbang!")
+                        stacks.append(('enemy', 'add', i, 'stun', 1))
+                        floats.append(('enemy', i, 'STUN', 700, WHITE))
             elif act['type'] in ('sunder','rush','combo','backstab'):
                 i = act.get('target_index')
                 if 0 <= i < len(self.enemies):
@@ -3122,11 +3575,14 @@ class Battle:
                     actor = self.party.members[a_ix]
                     base = max(1, random.randint(1, 6) + actor.atk_bonus)
                     hit = True if act['type'] == 'backstab' else (random.random() < 0.65)
+                    pending_stacks = act.setdefault('_pending_stacks', [])
+                    pending_floaters = act.setdefault('_pending_floaters', [])
                     if act['type'] == 'sunder':
                         base += 1
                     if act['type'] == 'rush':
                         base += 3
-                        self._status_add('party', a_ix, 'vulnerable', 1)
+                        pending_stacks.append(('party', 'add', a_ix, 'vulnerable', 1))
+                        pending_floaters.append(('party', a_ix, 'VULN', 700, YELLOW))
                     times = 2 if act['type'] == 'combo' else 1
                     total_dmg = 0
                     for _ in range(times):
@@ -3147,14 +3603,28 @@ class Battle:
                                 pass
                             self.add_floater('enemy', i, str(dmg), 700, WHITE)
                             if self.enemies[i].hp <= 0:
+                                name_def = self.enemies[i].name
                                 self.enemies[i].hp = 0
+                                act.setdefault('_defeated', []).append(name_def)
                                 self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
                                 self._on_enemy_defeated(i)
                         else:
                             self.add_floater('enemy', i, 'MISS', 700, WHITE)
-                    if act['type'] == 'sunder' and hit:
-                        self._status_add('enemy', i, 'vulnerable', 2)
-                    self.log.add(f"{self.party.members[a_ix].name} uses {act['type'].title()} for {total_dmg}.")
+                    hit_flag = total_dmg > 0
+                    if act['type'] == 'sunder' and hit_flag and self.enemies[i].hp > 0:
+                        pending_stacks.append(('enemy', 'add', i, 'vulnerable', 2))
+                        pending_floaters.append(('enemy', i, 'VULN', 700, YELLOW))
+                    target_name = self.enemies[i].name if 0 <= i < len(self.enemies) else 'their foe'
+                    skill_name = act.get('skill_name') or act['type'].title()
+                    act['hit'] = hit_flag
+                    act['dmg'] = total_dmg
+                    if hit_flag:
+                        act['label'] = f"{actor.name} uses {skill_name} for {total_dmg}."
+                        act.pop('miss_label', None)
+                    else:
+                        act['miss_label'] = f"{actor.name} misses {target_name} with {skill_name}."
+                        act.pop('label', None)
+                    self._log_primary_attack_outcome(act)
             elif act['type'] == 'surge':
                 # Spark-like damage to all
                 total_dmg = 0
@@ -3167,7 +3637,10 @@ class Battle:
                     total_dmg += dmg
                     self.add_floater('enemy', i, str(dmg), 700, WHITE)
                     if e.hp <= 0:
-                        e.hp = 0; self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                        name_def = e.name
+                        e.hp = 0
+                        act.setdefault('_defeated', []).append(name_def)
+                        self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
                         self._on_enemy_defeated(i)
                 self.log.add(f"{self.party.members[a_ix].name} casts Surge for {total_dmg}.")
             elif act['type'] == 'storm':
@@ -3183,15 +3656,24 @@ class Battle:
                     total_dmg += dmg
                     self.add_floater('enemy', i, str(dmg), 700, WHITE)
                     if self.enemies[i].hp <= 0:
-                        self.enemies[i].hp = 0; self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                        name_def = self.enemies[i].name
+                        self.enemies[i].hp = 0
+                        act.setdefault('_defeated', []).append(name_def)
+                        self.dying_enemies[i] = {'start': pygame.time.get_ticks(), 'dur': 600}
                         self._on_enemy_defeated(i)
                 self.log.add(f"{self.party.members[a_ix].name} calls Storm for {total_dmg}.")
         elif act['type'] == 'pulse':
             ix = act.get('actor_index', -1)
             if 0 <= ix < len(self.enemies):
                 self.slime_pulsed[ix] = True
-                # Start a shake effect by repeatedly retriggering in draw
-                self.log.add(act.get('label', 'It pulses eerily...'))
+                text = act.get('result_text')
+                if text == '':
+                    text = None
+                if text is None:
+                    text = act.get('label')
+                if text:
+                    act['_result_line'] = text
+                act.pop('result_text', None)
         elif act['type'] == 'splash':
             ix = act.get('actor_index', -1)
             if 0 <= ix < len(self.enemies):
@@ -3243,6 +3725,8 @@ class Battle:
                     if getattr(en, 'hp', 0) > 0 and getattr(en, 'id', '') == 'slime':
                         en.hp = max(0, en.hp - per_wave_hits)
                         if en.hp <= 0:
+                            name_def = en.name
+                            act.setdefault('_defeated', []).append(name_def)
                             self.dying_enemies[j] = {'start': pygame.time.get_ticks(), 'dur': 600}
                             self._on_enemy_defeated(j)
                 # play sfx once per wave
@@ -3262,9 +3746,13 @@ class Battle:
                 # spin effect
                 self.enemy_spin[ix] = {'start': pygame.time.get_ticks(), 'dur': 500}
                 if e.hp <= 0:
+                    name_def = e.name
                     self.dying_enemies[ix] = {'start': pygame.time.get_ticks(), 'dur': 600}
+                    act.setdefault('_defeated', []).append(name_def)
                     self._on_enemy_defeated(ix)
-                self.log.add(act.get('label', f"{e.name} trips!"))
+                text = act.get('result_line') or act.get('label') or f"{e.name} trips!"
+                if text:
+                    act.setdefault('_result_line', text)
         elif act['type'] == 'steal':
             ix = act.get('actor_index', -1)
             self.goblin_steal_used[ix] = True
@@ -3407,10 +3895,12 @@ class Battle:
         hit = random.random() < hit_chance
         dmg = max(1, random.randint(1, 6) + actor.atk_bonus)
         gi = self.party.members.index(actor)
+        pre = f"{actor.name} attacks {e.name}"
         return {
             'type': 'attack', 'actor_side': 'party', 'actor_index': gi,
             'target_side': 'enemy', 'target_index': target_i,
             'hit': hit, 'dmg': dmg,
+            'pretext': pre,
             'label': f"{actor.name} hits {e.name} for {dmg}.",
             'miss_label': f"{actor.name} misses {e.name}.",
         }
@@ -3430,6 +3920,7 @@ class Battle:
             'type': 'spell', 'actor_side': 'party', 'actor_index': gi,
             'target_side': 'enemy', 'target_index': target_i,
             'hit': True, 'dmg': dmg,
+            'spell_name': 'Spark',
             'label': f"{actor.name} casts Spark for {dmg}!",
         }
 
@@ -6161,6 +6652,89 @@ class Game:
         self.r.text(view, item, (x + pad_x, y + pad_y + text_h + 6))
         self.r.text_small(view, "Enter/Esc: Close", (x + pad_x, y + pad_y + text_h * 2 + 10), LIGHT)
 
+    def draw_message_window(self):
+        if self.mode in (MODE_DIALOG, MODE_TRAIT, MODE_VICTORY, MODE_DEFEAT):
+            return
+        text = self.log.active_text()
+        if not text and self.mode != MODE_BATTLE:
+            return
+        if not text and self.mode == MODE_BATTLE:
+            text = self.log.last_line() or ''
+        if not text:
+            return
+        view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
+        if self.mode != MODE_BATTLE:
+            overlay = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 80))
+            view.blit(overlay, (0, 0))
+        pad_x, pad_y = 16, 12
+        title = "Message"
+        title_h = self.r.font_big.get_height()
+        line_h = self.r.font.get_height()
+        top_h = max(80, VIEW_H // 4)
+        panel_w = WIDTH - 40
+        panel_h = top_h
+        x = 20
+        y = 10
+        max_text_w = panel_w - pad_x * 2
+        lines: List[str] = []
+        for raw in text.split('\n'):
+            stripped = raw.strip()
+            if not stripped:
+                lines.append('')
+                continue
+            wrapped = self._wrap_text(stripped, max_text_w)
+            lines.extend(wrapped if wrapped else [''])
+        if not lines:
+            lines = ['']
+        rect = pygame.Rect(x, y, panel_w, panel_h)
+        pygame.draw.rect(view, (18, 18, 26), rect)
+        pygame.draw.rect(view, YELLOW, rect, 2)
+        self.r.text_big(view, title, (x + pad_x, y + pad_y), YELLOW)
+        name_text_gap = 16
+        text_y = y + pad_y + title_h + name_text_gap
+        for ln in lines:
+            self.r.text(view, ln, (x + pad_x, text_y))
+            text_y += line_h
+        prompt_text = None
+        if self.log.require_ack:
+            if self.log.needs_ack():
+                blink = (pygame.time.get_ticks() // 300) % 2 == 0
+                prompt_text = "Enter: Continue" if blink else None
+            elif self.log.is_typing():
+                blink = (pygame.time.get_ticks() // 300) % 2 == 0
+                prompt_text = "Enter: Skip" if blink else None
+        elif not self.log.is_typing() and self.log.has_pending():
+            blink = (pygame.time.get_ticks() // 300) % 2 == 0
+            if blink:
+                prompt_text = '>'
+        if prompt_text:
+            prompt_font = self.r.font_small
+            prompt_w, prompt_h = prompt_font.size(prompt_text)
+            self.r.text_small(view, prompt_text, (x + panel_w - pad_x - prompt_w, y + panel_h - pad_y - prompt_h), YELLOW)
+
+    def enemy_hud_top(self) -> int:
+        message_bottom = 10 + max(80, VIEW_H // 4)
+        usable = max(1, VIEW_H - message_bottom)
+        base_ratio = 28.0 / float(VIEW_H)
+        y = int(message_bottom + base_ratio * usable)
+        y = max(message_bottom + 8, y)
+        max_top = VIEW_H - 60 - 140
+        return min(y, max_top)
+
+    def party_hud_top(self, enemy_top: int, hud_height: int = 60) -> int:
+        bottom_margin = 48
+        orig_enemy_top = 28
+        orig_party_top = VIEW_H - hud_height - 16
+        desired_gap = orig_party_top - orig_enemy_top
+        max_top = VIEW_H - hud_height - bottom_margin
+        candidate = enemy_top + desired_gap
+        candidate = min(candidate, max_top)
+        min_gap = 140
+        min_allowed = min(max_top, enemy_top + min_gap)
+        candidate = max(min_allowed, candidate)
+        return int(candidate)
+
     # --------------- Dialog ---------------
     def start_dialog(self, npc_id: str):
         self.dialog_active = True
@@ -7557,6 +8131,10 @@ class Game:
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Slightly brighter base to make background more visible
         view.fill((14, 14, 22))
+        enemy_row_y = self.enemy_hud_top()
+        party_row_y = self.party_hud_top(enemy_row_y)
+        enemy_win_h = 60
+        party_win_h = 60
         # Determine if special silence background should override regular effects
         censor_fx_draw: Optional[Dict[str, Any]] = None
         if b and getattr(b, 'is_censor_battle', False) and getattr(b, 'censor_pulse_disabled', False):
@@ -7808,7 +8386,7 @@ class Game:
                         except Exception:
                             pass
                     src_cx = xstart + col * (w + gap) + w // 2
-                    base_party_y = VIEW_H - 60 - 16
+                    base_party_y = party_row_y
                     # Enemy centers (from battle state)
                     alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
                     ne = max(1, len(alive))
@@ -7817,7 +8395,7 @@ class Game:
                     xse = (WIDTH - totale) // 2 + gap
                     j = sorted(alive).index(ti) if ti in alive else 0
                     dst_cx = xse + j * (we + gap) + we // 2
-                    enemy_y = 28
+                    enemy_y = enemy_row_y
                     dy_full = enemy_y - base_party_y  # negative
                     dx_full = dst_cx - src_cx
                     if act.get('type') == 'rush':
@@ -7889,7 +8467,7 @@ class Game:
                     xse = (WIDTH - total_e) // 2 + gap
                     j_ai = sorted(alive_e).index(ai) if ai in alive_e else 0
                     src_cx = xse + j_ai * (we + gap) + we // 2
-                    enemy_y = 28
+                    enemy_y = enemy_row_y
                     # Party centers
                     members = [self.party.members[i] for i in self.party.active
                                if 0 <= i < len(self.party.members)
@@ -7907,7 +8485,7 @@ class Game:
                         except Exception:
                             pass
                     dst_cx = xsp + col_t * (w + gap) + w // 2
-                    base_party_y = VIEW_H - 60 - 16
+                    base_party_y = party_row_y
                     dy_full = base_party_y - enemy_y  # move down
                     dx_full = dst_cx - src_cx
                     if stage == 1:
@@ -7931,7 +8509,7 @@ class Game:
                     xse = (WIDTH - total_e) // 2 + gap
                     j_ai = alive_e.index(ai) if ai in alive_e else 0
                     src_cx = xse + j_ai * (we + gap) + we // 2
-                    enemy_y = 28
+                    enemy_y = enemy_row_y
                     members = [self.party.members[i] for i in self.party.active
                                if 0 <= i < len(self.party.members)
                                and self.party.members[i].alive and self.party.members[i].hp > 0]
@@ -7947,7 +8525,7 @@ class Game:
                         except Exception:
                             pass
                     dst_cx = xsp + col_t * (w + gap) + w // 2
-                    base_party_y = VIEW_H - 60 - 16
+                    base_party_y = party_row_y
                     dy_full = base_party_y - enemy_y
                     dx_full = dst_cx - src_cx
                     if stage == 1:
@@ -8082,8 +8660,39 @@ class Game:
                     offsets_party[gi] = offsets_party.get(gi, 0) + sy
                     offsets_party_x[gi] = offsets_party_x.get(gi, 0) + sx
 
-        enemy_rects = self.r.draw_combat_enemy_windows(b.enemies if b else [], self.effects, enemy_highlight, enemy_acting, dying_prog, offsets_enemy, offsets_enemy_x, rotations_enemy) if b else {}
-        party_rects = self.r.draw_combat_party_windows(self.party, self.effects, party_highlight, party_acting, offsets_party, offsets_party_x)
+        enemy_rects = self.r.draw_combat_enemy_windows(
+            b.enemies if b else [],
+            self.effects,
+            enemy_highlight,
+            enemy_acting,
+            dying_prog,
+            offsets_enemy,
+            offsets_enemy_x,
+            rotations_enemy,
+            base_y=enemy_row_y,
+        ) if b else {}
+        party_rects = self.r.draw_combat_party_windows(
+            self.party,
+            self.effects,
+            party_highlight,
+            party_acting,
+            offsets_party,
+            offsets_party_x,
+            base_y=party_row_y,
+        )
+
+        enemy_bottom = enemy_row_y + enemy_win_h
+        party_top = party_row_y
+        gap_top = enemy_bottom + 12
+        gap_bottom = party_top - 12
+        gap_height = party_top - enemy_bottom
+        ui_midline = enemy_bottom + max(0.0, gap_height) * 0.5
+        if gap_height > 40:
+            menu_min_top = gap_top
+            menu_max_bottom = gap_bottom
+        else:
+            menu_min_top = None
+            menu_max_bottom = None
 
         if b and b.kobold_dart_fx:
             now = pygame.time.get_ticks()
@@ -8450,7 +9059,11 @@ class Game:
             panel_w = 180
             panel_h = inner_py + header_h + 6 + lines * line_h + inner_py
             rect_x = 12
-            rect_y = max(0, VIEW_H // 2 - panel_h // 2)
+            rect_y = int(ui_midline - panel_h / 2)
+            if gap_bottom > gap_top:
+                max_top_allowed = gap_bottom - panel_h
+                rect_y = max(gap_top, min(max_top_allowed, rect_y))
+            rect_y = max(12, min(VIEW_H - panel_h - 12, rect_y))
             panel_rect = pygame.Rect(rect_x, rect_y, panel_w, panel_h)
             pygame.draw.rect(view, (16, 16, 20), panel_rect)
             pygame.draw.rect(view, YELLOW, panel_rect, 1)
@@ -8492,7 +9105,11 @@ class Game:
                     w = text_w + pad_x * 2
                     h = text_h * len(options) + pad_y * 2
                     x = WIDTH // 2 - w // 2
-                    y = VIEW_H // 2 - h // 2
+                    center_y = ui_midline
+                    y = int(center_y - h / 2)
+                    if menu_min_top is not None and menu_max_bottom is not None:
+                        y = max(menu_min_top, min(menu_max_bottom - h, y))
+                    y = max(12, min(VIEW_H - h - 12, y))
                     rect = pygame.Rect(x, y, w, h)
                     pygame.draw.rect(view, (16, 16, 20), rect)
                     pygame.draw.rect(view, YELLOW, rect, 2)
@@ -8507,14 +9124,14 @@ class Game:
             elif b.state == 'skillmenu':
                 opts = [label for _id, label in b.skill_options] or ["(No skills)"]
                 opts = opts + ["Back"]
-                self.r.draw_center_menu(opts, b.skill_menu_index)
+                self.r.draw_center_menu(opts, b.skill_menu_index, center_y=ui_midline, min_top=menu_min_top, max_bottom=menu_max_bottom)
             elif b.state == 'itemmenu':
                 items = b.usable_items()
                 options = [ITEMS_BY_ID.get(iid, {"name": iid}).get('name', iid) for iid in items] or ["(no usable items)"]
                 options = options + ["Back"]
-                self.r.draw_center_menu(options, b.item_menu_index)
+                self.r.draw_center_menu(options, b.item_menu_index, center_y=ui_midline, min_top=menu_min_top, max_bottom=menu_max_bottom)
             elif b.state == 'itemaction':
-                self.r.draw_center_menu(["Use", "Cancel"], b.item_action_index)
+                self.r.draw_center_menu(["Use", "Cancel"], b.item_action_index, center_y=ui_midline, min_top=menu_min_top, max_bottom=menu_max_bottom)
             elif b.state == 'target':
                 # No center menu in target selection; use highlights only
                 pass
@@ -9159,8 +9776,8 @@ class Game:
                 # Overlays that can appear on top
                 self.draw_save_feedback()
                 self.draw_load_feedback()
-                # Draw message log for non-title scenes (with typewriter effect)
-                self.r.draw_log(self.log.render_lines())
+                # Window-style message overlay replaces the old log panel
+                self.draw_message_window()
             pygame.display.flip()
 
         pygame.quit()
