@@ -1688,6 +1688,7 @@ class Battle:
         self.censor_silence_fx: Optional[Dict[str, Any]] = None
         self.censor_music_fade_pending: bool = False
         self.censor_pulse_disabled: bool = False
+        self._pending_anim: Optional[Dict[str, Any]] = None
 
     # ----- Slime Mind helpers -----
     def _spawn_slime_with_hp(self, around_index: int, hp: int):
@@ -2637,23 +2638,42 @@ class Battle:
         self.enemy_queue = []
 
     def start_animation(self, action: Dict[str, Any]):
+        if action is None:
+            return
+        if not action.get('_pretext_prepared'):
+            pretext = self._format_action_pretext(action)
+            if isinstance(pretext, str) and pretext.strip():
+                token = self.log.add_pretext(pretext)
+                action['_log_token'] = token
+            else:
+                action.pop('_log_token', None)
+            action['_pretext_prepared'] = True
+        self._pending_anim = action
+        self._try_start_animation()
+
+    def _try_start_animation(self):
+        if not self._pending_anim:
+            return
+        if self.anim is not None:
+            return
+        if self.log.is_typing() or self.log.has_pending():
+            return
+        action = self._pending_anim
+        self._pending_anim = None
+        self._start_animation_now(action)
+
+    def _start_animation_now(self, action: Dict[str, Any]):
         now = pygame.time.get_ticks()
-        # Staged timing: windup (actor flashes) -> pre-impact pause -> impact (target animates) -> recover
         self.anim = {'action': action, 'stage': 0, 't0': now, 'dur': [240, 140, 240, 160]}
-        # Slightly longer pre-impact pause for certain enemy skills (e.g., Goblin Trip)
         if action.get('type') == 'trip':
             self.anim['dur'] = [240, 220, 260, 180]
-        # Spells (e.g., Spark): extend pre stage to 1000ms to allow visible projectile travel
         if action.get('type') == 'spell':
             self.anim['dur'] = [240, 1000, 240, 180]
-        # Slime 'splash' (spray) projectile travel time
         if action.get('type') == 'splash':
             self.anim['dur'] = [240, 1000, 240, 180]
         if action.get('type') == 'kobold_poison_dart':
-            # Fast dart: short windup and quick travel
             self.anim['dur'] = [200, 220, 220, 160]
         if action.get('type') == 'censor_mana_burn':
-            # Allow longer charge-up for the mana drain
             self.anim['dur'] = [260, 520, 260, 200]
         if action.get('bone_bash'):
             self.anim['dur'] = [260, 220, 260, 200]
@@ -2661,38 +2681,23 @@ class Battle:
             self.anim['dur'] = [200, 160, 200, 140]
         if action.get('type') == 'suck_blood' and action.get('hit'):
             self.anim['dur'] = [220, 240, 220, 160]
-        # Goblin chief custom timings
         if action.get('type') == 'goblin_devour':
-            # Move to goblin, eat, return
             self.anim['dur'] = [200, 380, 240, 200]
         if action.get('type') == 'goblin_throw':
-            # Hop to goblin during windup; throw projectile during pre (same as Spark)
             self.anim['dur'] = [240, 1000, 240, 180]
             try:
-                if self.sfx: self.sfx.play('miss', 0.6)
+                if self.sfx:
+                    self.sfx.play('miss', 0.6)
             except Exception:
                 pass
-        # Skill-specific timing/feel
         if action.get('type') in ('sunder',):
-            # normal hit cadence like attack
             self.anim['dur'] = [240, 140, 240, 160]
         if action.get('type') in ('rush',):
-            # longer pre to travel up to target, snappy impact
             self.anim['dur'] = [200, 380, 240, 180]
         if action.get('type') in ('combo',):
-            # quick approach, longer impact for double bump
             self.anim['dur'] = [180, 260, 300, 200]
         if action.get('type') in ('backstab',):
-            # fade/teleport feel: longer pre, then impact
             self.anim['dur'] = [200, 420, 240, 200]
-        pretext = self._format_action_pretext(action)
-        if pretext:
-            token = self.log.add_pretext(pretext)
-            action['_log_token'] = token
-            # Small delay before windup to let pretext finish
-            self.anim['t0'] += max(0, int(len(pretext) * (1000.0 / max(1.0, self.log._cps))))
-        else:
-            action.pop('_log_token', None)
         self.state = 'anim'
 
     def add_floater(self, side: str, index: int, text: str, dur: int = 700, color=WHITE):
@@ -2799,7 +2804,6 @@ class Battle:
     def _flush_action_text(self, act: Dict[str, Any]):
         if act.get('_text_flushed'):
             return
-        act['_text_flushed'] = True
         suffix = act.pop('_result_suffix', None)
         if suffix is None:
             suffix = act.pop('result_suffix', None)
@@ -2810,19 +2814,20 @@ class Battle:
         suffix_pending = False
         if suffix:
             status = self.log.append_suffix(suffix, token)
-            if status:
-                if status == 'applied':
-                    line = None
-                elif status == 'pending':
-                    return
-                elif status == 'typing':
-                    line = None
-                    suffix_pending = True
+            if status == 'pending':
+                return
+            if status == 'typing':
+                suffix_pending = True
+            elif status == 'applied':
+                line = None
             else:
                 if not line:
                     line = self._format_attack_final_line(act)
         if line:
             self.log.add(line)
+            line = None
+        if suffix_pending:
+            return
         stacks = act.pop('_pending_stacks', [])
         for side, op, idx, status, amount in stacks:
             try:
@@ -2870,6 +2875,9 @@ class Battle:
         if token is not None and not suffix_pending:
             self.log.release_token(token)
         act.pop('_log_token', None)
+        if suffix_pending:
+            return
+        act['_text_flushed'] = True
 
     def make_defend_action(self) -> Optional[Dict[str, Any]]:
         gi = self.current_actor_global_ix()
@@ -2963,10 +2971,12 @@ class Battle:
             if now - fx.get('start', now) < fx.get('dur', 520)
         }
         self._process_pending_bone_piles()
+        self._try_start_animation()
         # Safety: if all enemies are defeated and no death animations remain, finalize victory
         if not self.battle_over and not self.dying_enemies and not self.enemy_alive():
-            self.finish_victory()
-            # After forcing victory, stop updating further this frame
+            if not (self.log.is_typing() or self.log.has_pending()):
+                if self.finish_victory():
+                    return
             return
         if self.battle_over:
             return
@@ -3790,9 +3800,10 @@ class Battle:
                 self.log.add("You failed to run!")
 
     def check_end_and_maybe_finish(self) -> bool:
+        if self.log.is_typing() or self.log.has_pending():
+            return False
         if not self.enemy_alive():
-            self.finish_victory()
-            return True
+            return self.finish_victory()
         if not self.party.any_active_alive():
             self.finish_defeat()
             return True
@@ -3801,9 +3812,7 @@ class Battle:
     def finish_victory(self):
         # If any defeat animations are still running, delay victory finalize
         if self.dying_enemies:
-            # try again after animations complete
-            self.next_after_anim = {'actor_side': 'enemy'}  # dummy to keep loop flowing
-            return
+            return False
         # Gold based on each enemy's range (allows per-monster zero gold)
         total_gold = 0
         try:
@@ -3876,6 +3885,7 @@ class Battle:
         self.result = 'victory'
         self.kobold_dart_fx.clear()
         self.pending_bone_piles.clear()
+        return True
 
     def finish_defeat(self):
         self.log.add("The party has fallen...")
@@ -9389,6 +9399,11 @@ class Game:
     def update(self):
         # progress typewriter for message log every frame
         self.log.update()
+        if self.mode == MODE_BATTLE and self.in_battle:
+            try:
+                self.in_battle._try_start_animation()
+            except Exception:
+                pass
         # Trait selection animation/update is self-contained and blocks other updates
         if self.mode == MODE_TRAIT:
             try:
