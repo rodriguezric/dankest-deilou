@@ -1658,6 +1658,7 @@ class Battle:
         # Target selection
         self.target_menu_index: int = 0
         self.target_mode: Optional[Dict[str, Any]] = None  # {'side': 'enemy'|'party', 'action': 'attack'|'spell'|'heal'}
+        self.target_locked: bool = False
 
         # Items UI
         self.item_menu_index: int = 0
@@ -2578,6 +2579,7 @@ class Battle:
         if not self.party.any_active_alive():
             self.finish_defeat(); return
         self.state = 'menu'
+        self.target_locked = False
         self.ui_menu_index = 0
         self.ui_menu_options = []
         a = self.current_actor()
@@ -2637,9 +2639,36 @@ class Battle:
         # Deprecated in mixed initiative; kept for compatibility
         self.enemy_queue = []
 
-    def start_animation(self, action: Dict[str, Any]):
+    def _action_signature(self, action: Optional[Dict[str, Any]]) -> Tuple[Any, ...]:
+        if not isinstance(action, dict):
+            return ()
+        keys = (
+            'type',
+            'actor_side',
+            'actor_index',
+            'target_side',
+            'target_index',
+            'skill_name',
+            'spell_id',
+        )
+        return tuple(action.get(k) for k in keys)
+
+    def start_animation(self, action: Dict[str, Any]) -> bool:
         if action is None:
-            return
+            return False
+        sig = self._action_signature(action)
+        if self._pending_anim is not None:
+            # Ignore repeated confirmations while an action waits to start
+            pending_sig = self._action_signature(self._pending_anim)
+            if pending_sig == sig:
+                return False
+            return False
+        if self.anim is not None:
+            # Likewise ignore while an animation is already running
+            current = self.anim.get('action') if isinstance(self.anim, dict) else None
+            if self._action_signature(current) == sig:
+                return False
+            return False
         if not action.get('_pretext_prepared'):
             pretext = self._format_action_pretext(action)
             if isinstance(pretext, str) and pretext.strip():
@@ -2649,7 +2678,9 @@ class Battle:
                 action.pop('_log_token', None)
             action['_pretext_prepared'] = True
         self._pending_anim = action
+        self.target_locked = True
         self._try_start_animation()
+        return True
 
     def _try_start_animation(self):
         if not self._pending_anim:
@@ -7959,6 +7990,7 @@ class Game:
                     if chosen_id == 'attack':
                         b.state = 'target'
                         b.target_mode = {'side': 'enemy', 'action': 'attack'}
+                        b.target_locked = False
                         alive_enemy_indices = [i for i, e in enumerate(b.enemies) if e.hp > 0]
                         b.target_menu_index = 0
                         if not alive_enemy_indices:
@@ -8004,15 +8036,18 @@ class Game:
                             # choose enemy target
                             b.state = 'target'
                             b.target_mode = {'side': 'enemy', 'action': 'spell'}
+                            b.target_locked = False
                             b.target_menu_index = 0
                         elif sid in ('sunder','rush','combo','backstab','dust'):
                             b.state = 'target'
                             b.target_mode = {'side': 'enemy', 'action': sid}
+                            b.target_locked = False
                             b.target_menu_index = 0
                         elif sid in ('regen','mend','heal'):
                             # choose party target
                             b.state = 'target'
                             b.target_mode = {'side': 'party', 'action': sid}
+                            b.target_locked = False
                             b.target_menu_index = 0
                         elif sid in ('flashbang','surge','storm'):
                             # no target selection (AOE)
@@ -8026,6 +8061,8 @@ class Game:
                 # choose from enemies or party based on target_mode
                 if not b.target_mode:
                     b.begin_player_turn(); return
+                if b.target_locked:
+                    return
                 if b.target_mode['side'] == 'enemy':
                     alive = [i for i, e in enumerate(b.enemies) if e.hp > 0]
                     if not alive:
@@ -8037,7 +8074,6 @@ class Game:
                         b.target_menu_index = (b.target_menu_index + 1) % len(alive)
                         self.sfx.play('ui_move', 0.5)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        self.sfx.play('ui_select', 0.6)
                         actor = b.current_actor()
                         target_i = alive[b.target_menu_index]
                         action_id = b.target_mode.get('action')
@@ -8047,10 +8083,14 @@ class Game:
                             act = b.make_spell_action(actor, target_i)
                         else:
                             act = b.make_skill_action(actor, target_i, action_id)
+                        accepted = False
                         if act:
-                            b.start_animation(act)
+                            accepted = b.start_animation(act)
+                        if accepted:
+                            self.sfx.play('ui_select', 0.6)
                     elif event.key == pygame.K_ESCAPE:
                         # go back to combat menu
+                        b.target_locked = False
                         b.state = 'menu'
                 else:
                     # party targeting (for heal) — follow on-screen order (self.party.active)
@@ -8066,7 +8106,6 @@ class Game:
                         b.target_menu_index = (b.target_menu_index + 1) % len(alive_gi)
                         self.sfx.play('ui_move', 0.5)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        self.sfx.play('ui_select', 0.6)
                         actor = b.current_actor()
                         target_gi = alive_gi[b.target_menu_index]
                         action_id = b.target_mode.get('action')
@@ -8085,10 +8124,14 @@ class Game:
                                     pass
                         else:
                             act = None
+                        accepted = False
                         if act:
-                            b.start_animation(act)
+                            accepted = b.start_animation(act)
+                        if accepted:
+                            self.sfx.play('ui_select', 0.6)
                     elif event.key == pygame.K_ESCAPE:
                         # go back to combat menu
+                        b.target_locked = False
                         b.state = 'menu'
             elif b.state == 'itemmenu':
                 items = b.usable_items()
@@ -8122,6 +8165,7 @@ class Game:
                         # choose party target for the item
                         b.state = 'target'
                         b.target_mode = {'side': 'party', 'action': 'item'}
+                        b.target_locked = False
                         b.target_menu_index = 0
                     else:
                         b.state = 'itemmenu'
