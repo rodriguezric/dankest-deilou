@@ -1,7 +1,15 @@
 [
   "potion_small",
-  "sword_basic",
-  "leather_armor",
+  "fighter_militia_blade",
+  "fighter_militia_shell",
+  "mage_apprentice_focus",
+  "mage_channelweave_robe",
+  "priest_concord_mace",
+  "priest_wardbound_vestments",
+  "rogue_venomedge",
+  "rogue_severedge",
+  "rogue_shockedge",
+  "rogue_shadeveil_leathers",
   "boots",
   "helm",
   "key"
