@@ -128,6 +128,25 @@ CLASS_COSTS = {"Rogue": 25, "Fighter": 35, "Priest": 40, "Mage": 45}
 DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 DIR_NAMES = ["N", "E", "S", "W"]
 
+LEGACY_WEAPON_MAP = {
+    'sword_basic': {
+        'Fighter': 'fighter_militia_blade',
+        'Priest': 'priest_concord_mace',
+        'Rogue': 'rogue_venomedge',
+        '_default': 'fighter_militia_blade',
+    }
+}
+
+LEGACY_ARMOR_MAP = {
+    'leather_armor': {
+        'Fighter': 'fighter_militia_shell',
+        'Priest': 'priest_wardbound_vestments',
+        'Mage': 'mage_channelweave_robe',
+        'Rogue': 'rogue_shadeveil_leathers',
+        '_default': 'fighter_militia_shell',
+    }
+}
+
 
 class MusicManager:
     def __init__(self):
@@ -319,6 +338,23 @@ def ability_mod(score: int) -> int:
     return (score - 5) // 2
 
 
+def map_legacy_item_id(cls_name: Optional[str], item_id: Optional[str], slot: str) -> Optional[str]:
+    if not item_id:
+        return item_id
+    slot = slot.lower()
+    if slot == 'weapon':
+        mapping = LEGACY_WEAPON_MAP.get(item_id)
+    elif slot == 'armor':
+        mapping = LEGACY_ARMOR_MAP.get(item_id)
+    else:
+        mapping = None
+    if not mapping:
+        return item_id
+    if cls_name and cls_name in mapping:
+        return mapping[cls_name]
+    return mapping.get('_default', item_id)
+
+
 @dataclass
 class Equipment:
     weapon_atk: int = 0
@@ -401,6 +437,19 @@ class Character:
                 c.cls = "Rogue" if str(v) == "Thief" else str(v)
             elif hasattr(c, k):
                 setattr(c, k, v)
+        # Remap legacy starter gear to the new class-specific set
+        c.equipment.weapon_id = map_legacy_item_id(c.cls, c.equipment.weapon_id, 'weapon')
+        c.equipment.armor_id = map_legacy_item_id(c.cls, c.equipment.armor_id, 'armor')
+        if c.equipment.weapon_id:
+            itm = ITEMS_BY_ID.get(c.equipment.weapon_id, {})
+            c.equipment.weapon_atk = int(itm.get('atk', c.equipment.weapon_atk or 0))
+        else:
+            c.equipment.weapon_atk = 0
+        if c.equipment.armor_id:
+            itm = ITEMS_BY_ID.get(c.equipment.armor_id, {})
+            c.equipment.armor_ac = int(itm.get('ac', c.equipment.armor_ac or 0))
+        else:
+            c.equipment.armor_ac = 0
         return c
 
 
@@ -445,7 +494,16 @@ class Party:
         p.members = [Character.from_dict(m) for m in d.get("members", [])]
         p.active = d.get("active", [])
         p.gold = int(d.get("gold", 0))
-        p.inventory = list(d.get("inventory", []))
+        inv: List[str] = []
+        for iid in d.get("inventory", []):
+            mapped = iid
+            if iid in LEGACY_WEAPON_MAP:
+                mapped = map_legacy_item_id(None, iid, 'weapon')
+            elif iid in LEGACY_ARMOR_MAP:
+                mapped = map_legacy_item_id(None, iid, 'armor')
+            if mapped:
+                inv.append(mapped)
+        p.inventory = inv
         p.clamp_active()
         return p
 
@@ -1881,9 +1939,83 @@ class Battle:
             return int(self.enemies[ix].statuses.get(name, 0))
         return 0
 
+    def _member_status_resist(self, member: Character, status: str) -> float:
+        total = 0.0
+        if not member:
+            return 0.0
+        for iid in filter(None, [member.equipment.weapon_id, member.equipment.armor_id, member.equipment.acc1_id, member.equipment.acc2_id]):
+            it = ITEMS_BY_ID.get(iid, {})
+            resist = it.get('status_resist') if isinstance(it, dict) else None
+            if isinstance(resist, dict):
+                try:
+                    total += float(resist.get(status, 0.0))
+                except (TypeError, ValueError):
+                    continue
+        return max(0.0, min(1.0, total))
+
+    def _member_proc_bonus(self, member: Character) -> float:
+        bonus = 0.0
+        if not member:
+            return 0.0
+        for iid in filter(None, [member.equipment.weapon_id, member.equipment.armor_id, member.equipment.acc1_id, member.equipment.acc2_id]):
+            it = ITEMS_BY_ID.get(iid, {})
+            try:
+                bonus += float(it.get('status_proc_bonus', 0.0))
+            except (TypeError, ValueError):
+                continue
+        return max(0.0, bonus)
+
+    def _weapon_on_hit_effect(self, member: Character) -> Optional[Dict[str, Any]]:
+        if not member or not member.equipment.weapon_id:
+            return None
+        it = ITEMS_BY_ID.get(member.equipment.weapon_id, {})
+        effect = it.get('on_hit_status') if isinstance(it, dict) else None
+        if not isinstance(effect, dict):
+            return None
+        name = effect.get('name')
+        if not name:
+            return None
+        try:
+            stacks = max(1, int(effect.get('stacks', 1)))
+        except (TypeError, ValueError):
+            stacks = 1
+        try:
+            chance = float(effect.get('chance', 0.0))
+        except (TypeError, ValueError):
+            chance = 0.0
+        return {
+            'name': str(name),
+            'stacks': stacks,
+            'chance': max(0.0, chance)
+        }
+
+    def _status_color(self, name: str, default: Tuple[int, int, int] = WHITE) -> Tuple[int, int, int]:
+        try:
+            return self.r.status_colors.get(name, default)
+        except Exception:
+            return default
+
     def _status_add(self, side: str, ix: int, name: str, stacks: int):
         if stacks <= 0:
             return
+        labels = {'poison': 'Poison', 'bleed': 'Bleed', 'vamp': 'Vamp', 'stun': 'Stun', 'regen': 'Regen', 'blind': 'Blind', 'blink': 'Blink', 'vulnerable': 'Vulnerable', 'weak': 'Weak', 'reassemble': 'Reassemble'}
+        if side == 'party' and 0 <= ix < len(self.party.members):
+            member = self.party.members[ix]
+            resist = self._member_status_resist(member, name)
+            if resist > 0.0:
+                try:
+                    roll = random.random()
+                except Exception:
+                    roll = 1.0
+                if roll < min(1.0, resist):
+                    label = labels.get(name, name.title())
+                    self.log.add(f"{member.name} resists {label}!")
+                    color = self._status_color(name, LIGHT)
+                    try:
+                        self.add_floater('party', ix, 'RESIST', 700, color)
+                    except Exception:
+                        pass
+                    return
         old = self._status_get(side, ix, name)
         new = min(9, old + int(stacks))
         if side == 'party' and 0 <= ix < len(self.party.members):
@@ -1893,7 +2025,7 @@ class Battle:
         # Log on first application
         if old == 0 and new > 0:
             who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
-            label = {'poison':'Poison','bleed':'Bleed','vamp':'Vamp','stun':'Stun','regen':'Regen','blind':'Blind','blink':'Blink','vulnerable':'Vulnerable','weak':'Weak','reassemble':'Reassemble'}.get(name, name.title())
+            label = labels.get(name, name.title())
             self.log.add(f"{who} gains {label} ({new}).")
 
     def _status_set(self, side: str, ix: int, name: str, stacks: int):
@@ -3121,6 +3253,34 @@ class Battle:
                             pass
                         # damage floater (enemy)
                         self.add_floater('enemy', i, str(dmg), 800, WHITE)
+                        if act.get('type') == 'attack' and act.get('actor_side') == 'party':
+                            gi = act.get('actor_index', -1)
+                            if 0 <= gi < len(self.party.members):
+                                attacker = self.party.members[gi]
+                                weapon_effect = self._weapon_on_hit_effect(attacker)
+                                if weapon_effect:
+                                    base_chance = weapon_effect.get('chance', 0.0)
+                                    chance = max(0.0, min(1.0, base_chance + self._member_proc_bonus(attacker)))
+                                    if chance > 0.0:
+                                        try:
+                                            roll = random.random()
+                                        except Exception:
+                                            roll = 1.0
+                                        if roll < chance:
+                                            status_name = weapon_effect.get('name')
+                                            before = self._status_get('enemy', i, status_name)
+                                            self._status_add('enemy', i, status_name, weapon_effect.get('stacks', 1))
+                                            after = self._status_get('enemy', i, status_name)
+                                            if after > before:
+                                                labels = {'poison': 'Poison', 'bleed': 'Bleed', 'vamp': 'Vamp', 'stun': 'Stun', 'regen': 'Regen', 'blind': 'Blind', 'blink': 'Blink', 'vulnerable': 'Vulnerable', 'weak': 'Weak', 'reassemble': 'Reassemble'}
+                                                label = labels.get(status_name, status_name.title())
+                                            weapon_name = ITEMS_BY_ID.get(attacker.equipment.weapon_id, {}).get('name', 'weapon')
+                                            self.log.add(f"{attacker.name}'s {weapon_name} inflicts {label}!")
+                                            color = self._status_color(status_name, YELLOW)
+                                            try:
+                                                self.add_floater('enemy', i, label.upper(), 700, color)
+                                            except Exception:
+                                                pass
                         # Slime Mind split-on-hit: on party Fight, if <2 slimes exist, spawn one with HP equal to damage dealt
                         try:
                             if act.get('type') == 'attack' and act.get('actor_side') == 'party':
@@ -4273,6 +4433,15 @@ class Game:
                 stock_ids = json.load(f)
         except Exception:
             stock_ids = [it.get('id') for it in items if it.get('id')]
+        remapped_stock = []
+        for iid in stock_ids:
+            mapped = iid
+            if iid in LEGACY_WEAPON_MAP:
+                mapped = map_legacy_item_id(None, iid, 'weapon')
+            elif iid in LEGACY_ARMOR_MAP:
+                mapped = map_legacy_item_id(None, iid, 'armor')
+            remapped_stock.append(mapped or iid)
+        stock_ids = [s for s in remapped_stock if s]
         # Expose to module-level for existing code paths
         global SHOP_ITEMS, ITEMS_BY_ID
         ITEMS_BY_ID = self.items_by_id
@@ -4557,7 +4726,17 @@ class Game:
                     try:
                         ix = int(k)
                         if isinstance(v, list):
-                            self.chests_state[ix] = list(v)
+                            remapped = []
+                            for entry in v:
+                                if isinstance(entry, dict):
+                                    entry = dict(entry)
+                                    iid = str(entry.get('iid')) if entry.get('iid') is not None else None
+                                    if iid and iid in LEGACY_WEAPON_MAP:
+                                        entry['iid'] = map_legacy_item_id(None, iid, 'weapon') or iid
+                                    elif iid and iid in LEGACY_ARMOR_MAP:
+                                        entry['iid'] = map_legacy_item_id(None, iid, 'armor') or iid
+                                remapped.append(entry)
+                            self.chests_state[ix] = remapped
                     except Exception:
                         continue
         except Exception:
@@ -9550,6 +9729,10 @@ class Game:
                         if idx is not None:
                             chest = lvl.chests.pop(idx)
                             iid = str(chest.get('iid'))
+                            if iid in LEGACY_WEAPON_MAP:
+                                iid = map_legacy_item_id(None, iid, 'weapon') or iid
+                            elif iid in LEGACY_ARMOR_MAP:
+                                iid = map_legacy_item_id(None, iid, 'armor') or iid
                             it = ITEMS_BY_ID.get(iid, {'name': iid})
                             self.party.inventory.append(iid)
                             # Persist remaining chests for this level

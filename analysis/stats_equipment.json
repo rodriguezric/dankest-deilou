@@ -15,7 +15,7 @@
           "probability_pct": 3.25,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "fighter_militia_blade",
               "great_axe",
               "titan_maul",
               "crusher_pick",
@@ -23,7 +23,7 @@
               "wyrmcleaver"
             ],
             "armor": [
-              "leather_armor",
+              "fighter_militia_shell",
               "steel_carapace",
               "colossus_plate",
               "stonewall_armor",
@@ -57,7 +57,7 @@
           "probability_pct": 3.06,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "fighter_militia_blade",
               "great_axe",
               "titan_maul",
               "crusher_pick",
@@ -65,7 +65,7 @@
               "wyrmcleaver"
             ],
             "armor": [
-              "leather_armor",
+              "fighter_militia_shell",
               "steel_carapace",
               "colossus_plate",
               "stonewall_armor",
@@ -99,7 +99,7 @@
           "probability_pct": 2.6,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "fighter_militia_blade",
               "great_axe",
               "titan_maul",
               "crusher_pick",
@@ -107,7 +107,7 @@
               "wyrmcleaver"
             ],
             "armor": [
-              "leather_armor",
+              "fighter_militia_shell",
               "steel_carapace",
               "colossus_plate",
               "stonewall_armor",
@@ -141,7 +141,7 @@
           "probability_pct": 2.42,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "fighter_militia_blade",
               "great_axe",
               "titan_maul",
               "crusher_pick",
@@ -149,7 +149,7 @@
               "wyrmcleaver"
             ],
             "armor": [
-              "leather_armor",
+              "fighter_militia_shell",
               "steel_carapace",
               "colossus_plate",
               "stonewall_armor",
@@ -183,7 +183,7 @@
           "probability_pct": 2.14,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "fighter_militia_blade",
               "great_axe",
               "titan_maul",
               "crusher_pick",
@@ -191,7 +191,7 @@
               "wyrmcleaver"
             ],
             "armor": [
-              "leather_armor",
+              "fighter_militia_shell",
               "steel_carapace",
               "colossus_plate",
               "stonewall_armor",
@@ -233,13 +233,15 @@
           "probability_pct": 2.6,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "rogue_severedge",
+              "rogue_shockedge",
+              "rogue_venomedge",
               "wind_blades",
               "storm_knives",
               "shadow_rippers"
             ],
             "armor": [
-              "leather_armor",
+              "rogue_shadeveil_leathers",
               "shadow_jacket",
               "phantom_wrap",
               "nightveil_cloak"
@@ -271,13 +273,15 @@
           "probability_pct": 2.55,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "rogue_severedge",
+              "rogue_shockedge",
+              "rogue_venomedge",
               "wind_blades",
               "storm_knives",
               "shadow_rippers"
             ],
             "armor": [
-              "leather_armor",
+              "rogue_shadeveil_leathers",
               "shadow_jacket",
               "phantom_wrap",
               "nightveil_cloak"
@@ -309,13 +313,15 @@
           "probability_pct": 2.42,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "rogue_severedge",
+              "rogue_shockedge",
+              "rogue_venomedge",
               "wind_blades",
               "storm_knives",
               "shadow_rippers"
             ],
             "armor": [
-              "leather_armor",
+              "rogue_shadeveil_leathers",
               "shadow_jacket",
               "phantom_wrap",
               "nightveil_cloak"
@@ -347,13 +353,15 @@
           "probability_pct": 2.23,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "rogue_severedge",
+              "rogue_shockedge",
+              "rogue_venomedge",
               "wind_blades",
               "storm_knives",
               "shadow_rippers"
             ],
             "armor": [
-              "leather_armor",
+              "rogue_shadeveil_leathers",
               "shadow_jacket",
               "phantom_wrap",
               "nightveil_cloak"
@@ -385,13 +393,15 @@
           "probability_pct": 2.06,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "rogue_severedge",
+              "rogue_shockedge",
+              "rogue_venomedge",
               "wind_blades",
               "storm_knives",
               "shadow_rippers"
             ],
             "armor": [
-              "leather_armor",
+              "rogue_shadeveil_leathers",
               "shadow_jacket",
               "phantom_wrap",
               "nightveil_cloak"
@@ -431,13 +441,13 @@
           "probability_pct": 6.82,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "priest_concord_mace",
               "blessed_mace",
               "sun_flail",
               "seraph_staff"
             ],
             "armor": [
-              "leather_armor",
+              "priest_wardbound_vestments",
               "sanctified_mail",
               "dawnplate",
               "aurora_raiment"
@@ -469,13 +479,13 @@
           "probability_pct": 6.76,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "priest_concord_mace",
               "blessed_mace",
               "sun_flail",
               "seraph_staff"
             ],
             "armor": [
-              "leather_armor",
+              "priest_wardbound_vestments",
               "sanctified_mail",
               "dawnplate",
               "aurora_raiment"
@@ -507,13 +517,13 @@
           "probability_pct": 6.39,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "priest_concord_mace",
               "blessed_mace",
               "sun_flail",
               "seraph_staff"
             ],
             "armor": [
-              "leather_armor",
+              "priest_wardbound_vestments",
               "sanctified_mail",
               "dawnplate",
               "aurora_raiment"
@@ -545,13 +555,13 @@
           "probability_pct": 4.0,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "priest_concord_mace",
               "blessed_mace",
               "sun_flail",
               "seraph_staff"
             ],
             "armor": [
-              "leather_armor",
+              "priest_wardbound_vestments",
               "sanctified_mail",
               "dawnplate",
               "aurora_raiment"
@@ -583,13 +593,13 @@
           "probability_pct": 3.97,
           "equipment": {
             "weapon": [
-              "sword_basic",
+              "priest_concord_mace",
               "blessed_mace",
               "sun_flail",
               "seraph_staff"
             ],
             "armor": [
-              "leather_armor",
+              "priest_wardbound_vestments",
               "sanctified_mail",
               "dawnplate",
               "aurora_raiment"
@@ -629,12 +639,13 @@
           "probability_pct": 3.22,
           "equipment": {
             "weapon": [
+              "mage_apprentice_focus",
               "arcane_staff",
               "mind_focuser",
               "eldritch_focus"
             ],
             "armor": [
-              "leather_armor",
+              "mage_channelweave_robe",
               "mystic_robe",
               "astral_mantle",
               "voidshroud"
@@ -666,12 +677,13 @@
           "probability_pct": 2.89,
           "equipment": {
             "weapon": [
+              "mage_apprentice_focus",
               "arcane_staff",
               "mind_focuser",
               "eldritch_focus"
             ],
             "armor": [
-              "leather_armor",
+              "mage_channelweave_robe",
               "mystic_robe",
               "astral_mantle",
               "voidshroud"
@@ -703,12 +715,13 @@
           "probability_pct": 2.77,
           "equipment": {
             "weapon": [
+              "mage_apprentice_focus",
               "arcane_staff",
               "mind_focuser",
               "eldritch_focus"
             ],
             "armor": [
-              "leather_armor",
+              "mage_channelweave_robe",
               "mystic_robe",
               "astral_mantle",
               "voidshroud"
@@ -740,12 +753,13 @@
           "probability_pct": 2.38,
           "equipment": {
             "weapon": [
+              "mage_apprentice_focus",
               "arcane_staff",
               "mind_focuser",
               "eldritch_focus"
             ],
             "armor": [
-              "leather_armor",
+              "mage_channelweave_robe",
               "mystic_robe",
               "astral_mantle",
               "voidshroud"
@@ -777,12 +791,13 @@
           "probability_pct": 2.33,
           "equipment": {
             "weapon": [
+              "mage_apprentice_focus",
               "arcane_staff",
               "mind_focuser",
               "eldritch_focus"
             ],
             "armor": [
-              "leather_armor",
+              "mage_channelweave_robe",
               "mystic_robe",
               "astral_mantle",
               "voidshroud"

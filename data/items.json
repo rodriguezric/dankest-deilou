@@ -22,37 +22,156 @@
     "desc": "A dusty manual that teaches a fresh personal trait."
   },
   {
-    "id": "sword_basic",
-    "name": "Sword",
+    "id": "fighter_militia_blade",
+    "name": "Militia Blade",
     "type": "weapon",
     "atk": 1,
-    "price": 60,
+    "price": 70,
     "req": {
-      "class": [
-        "Fighter",
-        "Rogue",
-        "Priest"
-      ],
+      "class": "Fighter",
       "level": 1
     },
-    "desc": "A dependable training blade."
+    "desc": "Forge-tempered steel issued to every village defender.",
+    "str": 1,
+    "vit": 1
   },
   {
-    "id": "leather_armor",
-    "name": "Leather Armor",
+    "id": "fighter_militia_shell",
+    "name": "Militia Shell",
     "type": "armor",
-    "ac": -1,
-    "price": 60,
+    "ac": -2,
+    "price": 70,
     "req": {
-      "class": [
-        "Fighter",
-        "Rogue",
-        "Priest",
-        "Mage"
-      ],
+      "class": "Fighter",
       "level": 1
     },
-    "desc": "Flexible leathers suited for novices."
+    "desc": "Layered plates and leather to blunt the first real blows.",
+    "vit": 1
+  },
+  {
+    "id": "mage_apprentice_focus",
+    "name": "Apprentice Focus",
+    "type": "weapon",
+    "atk": 1,
+    "price": 80,
+    "req": {
+      "class": "Mage",
+      "level": 1
+    },
+    "desc": "A crystal-tipped staff that channels disciplined sparks.",
+    "iq": 1,
+    "mp": 4
+  },
+  {
+    "id": "mage_channelweave_robe",
+    "name": "Channelweave Robe",
+    "type": "armor",
+    "ac": -1,
+    "price": 75,
+    "req": {
+      "class": "Mage",
+      "level": 1
+    },
+    "desc": "Light robes stitched with runes that quicken spellwork.",
+    "mp": 2,
+    "agi": 1
+  },
+  {
+    "id": "priest_concord_mace",
+    "name": "Concord Mace",
+    "type": "weapon",
+    "atk": 1,
+    "price": 75,
+    "req": {
+      "class": "Priest",
+      "level": 1
+    },
+    "desc": "Blessed silver that steadies the hand and heart alike.",
+    "pie": 1,
+    "mp": 2
+  },
+  {
+    "id": "priest_wardbound_vestments",
+    "name": "Wardbound Vestments",
+    "type": "armor",
+    "ac": -1,
+    "price": 80,
+    "req": {
+      "class": "Priest",
+      "level": 1
+    },
+    "desc": "Ceremonial layers traced with sigils that repel afflictions.",
+    "pie": 1,
+    "status_resist": {
+      "poison": 0.3,
+      "bleed": 0.3,
+      "stun": 0.3
+    }
+  },
+  {
+    "id": "rogue_venomedge",
+    "name": "Venomedge",
+    "type": "weapon",
+    "atk": 1,
+    "price": 75,
+    "req": {
+      "class": "Rogue",
+      "level": 1
+    },
+    "desc": "A slim blade coated with paralyzing toxins.",
+    "on_hit_status": {
+      "name": "poison",
+      "stacks": 2,
+      "chance": 0.2
+    }
+  },
+  {
+    "id": "rogue_severedge",
+    "name": "Severedge",
+    "type": "weapon",
+    "atk": 1,
+    "price": 75,
+    "req": {
+      "class": "Rogue",
+      "level": 1
+    },
+    "desc": "A jagged knife designed to keep wounds flowing.",
+    "on_hit_status": {
+      "name": "bleed",
+      "stacks": 1,
+      "chance": 0.2
+    }
+  },
+  {
+    "id": "rogue_shockedge",
+    "name": "Shockedge",
+    "type": "weapon",
+    "atk": 1,
+    "price": 75,
+    "req": {
+      "class": "Rogue",
+      "level": 1
+    },
+    "desc": "Twin forks that discharge concussive jolts.",
+    "on_hit_status": {
+      "name": "stun",
+      "stacks": 1,
+      "chance": 0.2
+    }
+  },
+  {
+    "id": "rogue_shadeveil_leathers",
+    "name": "Shadeveil Leathers",
+    "type": "armor",
+    "ac": -2,
+    "price": 75,
+    "req": {
+      "class": "Rogue",
+      "level": 1
+    },
+    "desc": "Smoke-dyed leathers that slip between incoming strikes.",
+    "agi": 1,
+    "status_proc_bonus": 0.05
   },
   {
     "id": "boots",
