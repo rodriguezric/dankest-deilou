@@ -4041,6 +4041,19 @@ class Battle:
         # Count non-escaped defeated enemies for weighting (each enemy awards the same formula)
         defeated_count = sum(1 for i, e in enumerate(self.enemies) if (i not in self.escaped_enemies) and getattr(e, 'hp', 0) <= 0)
         defeated_count = max(0, defeated_count)
+        # Guarantee a floor-scaled payout so early fights can cover healing costs.
+        if not hasattr(self, 'floor_num'):
+            floor_for_gold = 1
+        else:
+            try:
+                floor_for_gold = max(1, int(self.floor_num))
+            except Exception:
+                floor_for_gold = 1
+        base_floor_payout = 6 + 4 * max(0, floor_for_gold - 1)
+        per_enemy_bonus = 2 + max(0, floor_for_gold - 1)
+        minimum_gold = base_floor_payout + per_enemy_bonus * max(1, defeated_count)
+        if defeated_count > 0:
+            total_gold = max(total_gold, minimum_gold)
         # For each alive active member, compute per-enemy award and sum
         for gi in self.party.active:
             if not (0 <= gi < len(self.party.members)):
