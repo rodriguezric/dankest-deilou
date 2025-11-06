@@ -1578,6 +1578,18 @@ class MessageLog:
             return self._active_line
         return None
 
+    def clear_active(self):
+        """Clear any currently displayed or pending overlay text."""
+        self._current = ""
+        self._current_entry = None
+        self._reveal_chars = 0
+        self._active_line = None
+        self._last_line = ""
+        self._linger_until = 0
+        self._wait_for_ack = False
+        self._queue.clear()
+        self._pending_suffix_map.clear()
+
     def is_typing(self) -> bool:
         return bool(self._current)
 
@@ -2022,11 +2034,7 @@ class Battle:
             self.party.members[ix].statuses[name] = new
         elif side == 'enemy' and 0 <= ix < len(self.enemies):
             self.enemies[ix].statuses[name] = new
-        # Log on first application
-        if old == 0 and new > 0:
-            who = self.party.members[ix].name if side == 'party' else self.enemies[ix].name
-            label = labels.get(name, name.title())
-            self.log.add(f"{who} gains {label} ({new}).")
+        # Skip logging when stacks are added; only tracking state changes
 
     def _status_set(self, side: str, ix: int, name: str, stacks: int):
         prev = self._status_get(side, ix, name)
@@ -6528,8 +6536,49 @@ class Game:
                 self._start_elite_battle(self.level_ix, i, e)
                 break
 
+    def _announce_battle_enemies(self, enemies: List[Enemy]):
+        if not getattr(self, 'log', None):
+            return
+        try:
+            ordered: List[str] = []
+            counts: Dict[str, int] = {}
+            for enemy in enemies or []:
+                name = str(getattr(enemy, 'name', 'Unknown Foe'))
+                if name not in counts:
+                    counts[name] = 1
+                    ordered.append(name)
+                else:
+                    counts[name] += 1
+            parts: List[str] = []
+            for name in ordered:
+                cnt = counts.get(name, 0)
+                if cnt <= 0:
+                    continue
+                if cnt == 1:
+                    parts.append(name)
+                else:
+                    parts.append(f"{cnt}x {name}")
+            if not parts:
+                message = "You encounter... nothing?"
+            elif len(parts) == 1:
+                message = f"You encounter {parts[0]}!"
+            elif len(parts) == 2:
+                message = f"You encounter {parts[0]} and {parts[1]}!"
+            else:
+                message = f"You encounter {', '.join(parts[:-1])}, and {parts[-1]}!"
+            self.log.add(message)
+        except Exception:
+            try:
+                self.log.add("You encounter hostile foes!")
+            except Exception:
+                pass
+
     def _start_elite_battle(self, lvl_ix: int, elite_ix: int, elite: Dict[str, Any]):
         # Record context for post-battle handling
+        try:
+            self.log.clear_active()
+        except Exception:
+            pass
         self.elite_battle_ctx = {'level': lvl_ix, 'index': elite_ix, 'pos': (int(elite.get('x',0)), int(elite.get('y',0))), 'id': str(elite.get('id',''))}
         # Kick battle with single elite monster
         self.in_battle = Battle(self.party, self.log, self.effects, self.items_by_id, self.monsters_by_id, self.skills_config, self.sfx)
@@ -6546,6 +6595,7 @@ class Game:
         except Exception:
             pass
         self.in_battle.build_turn_order(); self.in_battle.turn_pos = 0
+        self._announce_battle_enemies(self.in_battle.enemies)
         # Music is handled in on_mode_changed when switching to COMBAT_INTRO
         # Transition
         self.mode = MODE_COMBAT_INTRO
@@ -6582,6 +6632,10 @@ class Game:
         self.log.add(f"Ascend to level {self.level_ix}.")
 
     def start_battle(self):
+        try:
+            self.log.clear_active()
+        except Exception:
+            pass
         self.in_battle = Battle(self.party, self.log, self.effects, self.items_by_id, self.monsters_by_id, self.skills_config, self.sfx)
         # Use level-specific encounter config if available
         lvl = self.dun.levels[self.level_ix]
@@ -6590,6 +6644,7 @@ class Game:
         floor_num = int(self.level_ix) + 1
         self.in_battle.floor_num = floor_num
         self.in_battle.start_random(allowed=allowed, group=group, floor_num=floor_num)
+        self._announce_battle_enemies(self.in_battle.enemies)
         # Begin transition on the labyrinth view first
         self.mode = MODE_COMBAT_INTRO
         self.combat_intro_active = True
@@ -9842,6 +9897,10 @@ class Game:
                 self.in_battle.next_turn()
             # Only react to battle end states when battle_over is set
             if self.in_battle.battle_over:
+                try:
+                    self.log.clear_active()
+                except Exception:
+                    pass
                 if self.in_battle.result == 'victory':
                     # Capture victory results for display (per-character EXP awards were computed in battle)
                     gold = getattr(self.in_battle, 'victory_gold', 0)
