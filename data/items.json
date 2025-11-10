@@ -4,7 +4,14 @@
     "name": "Potion",
     "type": "consumable",
     "heal": 10,
-    "price": 20
+    "price": 5
+  },
+  {
+    "id": "return_scroll",
+    "name": "Return Scroll",
+    "type": "consumable",
+    "price": 10,
+    "desc": "A rune-scribed parchment that warps explorers back to town when read in the labyrinth."
   },
   {
     "id": "serum",
