@@ -108,7 +108,9 @@ AC_BASE = 10
 
 # Data resources are loaded from JSON (monsters, items, skills, levels)
 # Module-level placeholders populated by Game.load_data()
-SHOP_ITEMS: List[Dict[str, Any]] = []
+SHOP_GENERAL_ITEMS: List[Dict[str, Any]] = []
+SHOP_CLASS_ITEMS: Dict[str, List[Dict[str, Any]]] = {}
+SHOP_CLASS_ORDER: List[str] = []
 ITEMS_BY_ID: Dict[str, Dict[str, Any]] = {}
 
 BONUS_KEY_MAP = {
@@ -4240,13 +4242,17 @@ class Game:
         self.create_state = {"step": 0, "name": "", "class_ix": 0}
         self.create_confirm_index = 0
         # Shop UI state
-        self.shop_phase = 'menu'  # 'menu' | 'buy_items' | 'sell_items' | 'buy_confirm' | 'sell_confirm'
+        self.shop_phase = 'menu'  # 'menu' | 'buy_general' | 'buy_class_select' | 'buy_class_items' | 'buy_confirm' | 'sell_items' | 'sell_confirm'
         self.shop_confirm_ix = 1  # 0 Yes, 1 No
         self.shop_pending_iid: Optional[str] = None
         self.shop_pending_name: str = ''
         self.shop_pending_gold: int = 0
         self.shop_index = 0       # generic index for current phase
         self.shop_buy_ix = 0
+        self.shop_class_ix = 0
+        self.shop_buy_class_ix = 0
+        self.shop_current_class: Optional[str] = None
+        self.shop_confirm_return: str = 'menu'
         self.shop_target_ix = 0
         self.shop_sell_member_ix = 0
         self.shop_sell_item_ix = 0
@@ -4447,26 +4453,62 @@ class Game:
         items = self.load_json(os.path.join('data', 'items.json'), [])
         self.items_list = items
         self.items_by_id = {it.get('id'): it for it in items if it.get('id')}
-        # Shop stock (ids) — if not present, default to all items
+        # Shop stock split between general goods and class gear
         stock_path = os.path.join('data', 'shop.json')
-        try:
-            with open(stock_path) as f:
-                stock_ids = json.load(f)
-        except Exception:
-            stock_ids = [it.get('id') for it in items if it.get('id')]
-        remapped_stock = []
-        for iid in stock_ids:
-            mapped = iid
-            if iid in LEGACY_WEAPON_MAP:
-                mapped = map_legacy_item_id(None, iid, 'weapon')
-            elif iid in LEGACY_ARMOR_MAP:
-                mapped = map_legacy_item_id(None, iid, 'armor')
-            remapped_stock.append(mapped or iid)
-        stock_ids = [s for s in remapped_stock if s]
-        # Expose to module-level for existing code paths
-        global SHOP_ITEMS, ITEMS_BY_ID
+        default_ids = [it.get('id') for it in items if it.get('id')]
+        stock_data = self.load_json(stock_path, None)
+
+        def remap_ids(raw_ids: List[str]) -> List[str]:
+            remapped: List[str] = []
+            for iid in raw_ids:
+                mapped = iid
+                if iid in LEGACY_WEAPON_MAP:
+                    mapped = map_legacy_item_id(None, iid, 'weapon')
+                elif iid in LEGACY_ARMOR_MAP:
+                    mapped = map_legacy_item_id(None, iid, 'armor')
+                remapped.append(mapped or iid)
+            return [s for s in remapped if s]
+
+        general_ids: List[str] = []
+        class_map: Dict[str, List[str]] = {}
+        class_order: List[str] = []
+        if stock_data is None:
+            general_ids = default_ids
+        elif isinstance(stock_data, dict):
+            raw_general = stock_data.get('general')
+            if isinstance(raw_general, list):
+                general_ids = raw_general
+            classes_data = stock_data.get('class_gear')
+            if classes_data is None:
+                classes_data = stock_data.get('classes')
+            if isinstance(classes_data, dict):
+                for cname, raw_ids in classes_data.items():
+                    class_order.append(cname)
+                    if isinstance(raw_ids, list):
+                        class_map[cname] = raw_ids
+                    else:
+                        class_map[cname] = []
+        elif isinstance(stock_data, list):
+            general_ids = stock_data
+        else:
+            general_ids = default_ids
+        if not general_ids and not class_map:
+            general_ids = default_ids
+
+        general_ids = remap_ids(general_ids)
+        class_map = {c: remap_ids(ids) for c, ids in class_map.items()}
+
+        # Expose to module-level for shop menus
+        global SHOP_GENERAL_ITEMS, SHOP_CLASS_ITEMS, SHOP_CLASS_ORDER, ITEMS_BY_ID
         ITEMS_BY_ID = self.items_by_id
-        SHOP_ITEMS = [self.items_by_id[i] for i in stock_ids if i in self.items_by_id]
+        SHOP_GENERAL_ITEMS = [self.items_by_id[i] for i in general_ids if i in self.items_by_id]
+        SHOP_CLASS_ITEMS = {
+            cname: [self.items_by_id[i] for i in ids if i in self.items_by_id]
+            for cname, ids in class_map.items()
+        }
+        if not class_order:
+            class_order = list(SHOP_CLASS_ITEMS.keys())
+        SHOP_CLASS_ORDER = list(class_order)
         # Monsters
         monsters = self.load_json(os.path.join('data', 'monsters.json'), [])
         self.monsters_by_id = {m.get('id'): m for m in monsters if m.get('id')}
@@ -5325,6 +5367,11 @@ class Game:
             self.mode = MODE_SHOP
             self.shop_phase = 'menu'
             self.shop_index = 0
+            self.shop_buy_ix = 0
+            self.shop_class_ix = 0
+            self.shop_buy_class_ix = 0
+            self.shop_current_class = None
+            self.shop_confirm_return = 'menu'
         elif ix == 6:
             if not self.party.active:
                 self.log.add("Choose up to 4 active members first (Form Party).")
@@ -6015,20 +6062,37 @@ class Game:
         self.r.text_small(view, f"Gold: {self.party.gold}", (WIDTH - 140, 20), YELLOW)
         y = 56
         if self.shop_phase == 'menu':
-            opts = ["Buy", "Sell", "Back"]
+            opts = ["General Goods", "Class Gear", "Sell", "Back"]
             for i, s in enumerate(opts):
                 prefix = "> " if i == self.shop_index else "  "
                 col = YELLOW if i == self.shop_index else WHITE
                 self.r.text(view, f"{prefix}{s}", (32, y), col); y += 22
             self.r.text_small(view, "Enter: Select  Esc: Back", (32, y + 4), LIGHT)
-        elif self.shop_phase == 'buy_items':
-            # Centered menu: item names only + Back
-            labels = [it.get('name', it.get('id', 'Item')) for it in SHOP_ITEMS]
+        elif self.shop_phase == 'buy_general':
+            labels = [it.get('name', it.get('id', 'Item')) for it in SHOP_GENERAL_ITEMS]
             options = labels + ["Back"] if labels else ["Back"]
-            if not hasattr(self, 'shop_buy_ix'):
-                self.shop_buy_ix = 0
             self.shop_buy_ix = self.shop_buy_ix % max(1, len(options))
+            self.r.text(view, "General Stock", (32, y))
             self.r.draw_center_menu(options, self.shop_buy_ix)
+        elif self.shop_phase == 'buy_class_select':
+            classes = SHOP_CLASS_ORDER if SHOP_CLASS_ORDER else list(SHOP_CLASS_ITEMS.keys())
+            options = classes + ["Back"] if classes else ["Back"]
+            self.shop_class_ix = self.shop_class_ix % max(1, len(options))
+            self.r.text(view, "Class Gear", (32, y))
+            if classes:
+                self.r.text_small(view, "Choose a class to view their gear", (32, y + 24), LIGHT)
+            self.r.draw_center_menu(options, self.shop_class_ix)
+        elif self.shop_phase == 'buy_class_items':
+            cls = self.shop_current_class or ''
+            stock = SHOP_CLASS_ITEMS.get(cls, [])
+            labels = [it.get('name', it.get('id', 'Item')) for it in stock]
+            options = labels + ["Back"] if labels else ["Back"]
+            self.shop_buy_class_ix = self.shop_buy_class_ix % max(1, len(options))
+            title = f"{cls} Gear" if cls else "Class Gear"
+            self.r.text(view, title, (32, y))
+            if not stock:
+                self.r.text_small(view, "No gear in stock for this class.", (32, y + 24), LIGHT)
+            self.r.draw_center_menu(options, self.shop_buy_class_ix)
         elif self.shop_phase == 'buy_confirm':
             # Darken and show confirmation
             s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
@@ -6041,7 +6105,7 @@ class Game:
             ty = VIEW_H//2 - 80
             self.r.text_big(view, msg, (tx, ty))
             self.r.draw_center_menu(["Yes","No"], self.shop_confirm_ix)
-        else:  # sell_items
+        elif self.shop_phase in ('sell_items', 'sell_confirm'):
             # Condensed list with quantities, centered menu (names only)
             ordered: List[str] = []
             counts: Dict[str, int] = {}
@@ -6079,37 +6143,99 @@ class Game:
         # Phase: menu
         if self.shop_phase == 'menu':
             if event.key in (pygame.K_UP, pygame.K_k):
-                self.shop_index = (self.shop_index - 1) % 3
+                self.shop_index = (self.shop_index - 1) % 4
             elif event.key in (pygame.K_DOWN, pygame.K_j):
-                self.shop_index = (self.shop_index + 1) % 3
+                self.shop_index = (self.shop_index + 1) % 4
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 if self.shop_index == 0:
-                    self.shop_phase = 'buy_items'; self.shop_buy_ix = 0
+                    if SHOP_GENERAL_ITEMS:
+                        self.shop_phase = 'buy_general'; self.shop_buy_ix = 0
+                    else:
+                        self.log.add("No general goods in stock.")
                 elif self.shop_index == 1:
+                    classes = SHOP_CLASS_ORDER if SHOP_CLASS_ORDER else list(SHOP_CLASS_ITEMS.keys())
+                    if classes:
+                        self.shop_phase = 'buy_class_select'
+                        self.shop_class_ix = 0
+                        self.shop_current_class = None
+                    else:
+                        self.log.add("No class gear in stock.")
+                elif self.shop_index == 2:
                     self.shop_phase = 'sell_items'; self.shop_sell_item_ix = 0
                 else:
                     self.mode = MODE_TOWN
             elif event.key == pygame.K_ESCAPE:
                 self.mode = MODE_TOWN
-        # Phase: buy_items
-        elif self.shop_phase == 'buy_items':
-            n = max(1, len(SHOP_ITEMS) + 1)  # +1 Back
+        # Phase: buy_general
+        elif self.shop_phase == 'buy_general':
+            n = max(1, len(SHOP_GENERAL_ITEMS) + 1)  # +1 Back
             if event.key in (pygame.K_UP, pygame.K_k):
                 self.shop_buy_ix = (self.shop_buy_ix - 1) % n
             elif event.key in (pygame.K_DOWN, pygame.K_j):
                 self.shop_buy_ix = (self.shop_buy_ix + 1) % n
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if self.shop_buy_ix == len(SHOP_ITEMS):
+                if self.shop_buy_ix == len(SHOP_GENERAL_ITEMS):
                     self.shop_phase = 'menu'; self.shop_index = 0
                 else:
-                    it = SHOP_ITEMS[self.shop_buy_ix]
+                    it = SHOP_GENERAL_ITEMS[self.shop_buy_ix]
                     self.shop_pending_iid = it.get('id', '')
                     self.shop_pending_name = it.get('name', 'Item')
                     self.shop_pending_gold = int(it.get('price', 0))
                     self.shop_confirm_ix = 1
+                    self.shop_confirm_return = 'buy_general'
                     self.shop_phase = 'buy_confirm'
             elif event.key == pygame.K_ESCAPE:
                 self.shop_phase = 'menu'; self.shop_index = 0
+        # Phase: buy_class_select
+        elif self.shop_phase == 'buy_class_select':
+            classes = SHOP_CLASS_ORDER if SHOP_CLASS_ORDER else list(SHOP_CLASS_ITEMS.keys())
+            if not classes:
+                self.log.add("No class gear in stock.")
+                self.shop_phase = 'menu'
+                self.shop_index = 1
+                return
+            n = len(classes) + 1  # +1 Back
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.shop_class_ix = (self.shop_class_ix - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.shop_class_ix = (self.shop_class_ix + 1) % n
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.shop_class_ix == len(classes):
+                    self.shop_phase = 'menu'; self.shop_index = 1
+                    self.shop_current_class = None
+                else:
+                    self.shop_current_class = classes[self.shop_class_ix]
+                    self.shop_phase = 'buy_class_items'
+                    self.shop_buy_class_ix = 0
+            elif event.key == pygame.K_ESCAPE:
+                self.shop_phase = 'menu'; self.shop_index = 1
+                self.shop_current_class = None
+        # Phase: buy_class_items
+        elif self.shop_phase == 'buy_class_items':
+            cls = self.shop_current_class
+            if not cls or cls not in SHOP_CLASS_ITEMS:
+                self.shop_phase = 'buy_class_select'
+                self.shop_buy_class_ix = 0
+                return
+            stock = SHOP_CLASS_ITEMS.get(cls, [])
+            n = max(1, len(stock) + 1)
+            if event.key in (pygame.K_UP, pygame.K_k):
+                self.shop_buy_class_ix = (self.shop_buy_class_ix - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self.shop_buy_class_ix = (self.shop_buy_class_ix + 1) % n
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.shop_buy_class_ix == len(stock):
+                    self.shop_phase = 'buy_class_select'
+                else:
+                    it = stock[self.shop_buy_class_ix]
+                    self.shop_pending_iid = it.get('id', '')
+                    self.shop_pending_name = it.get('name', 'Item')
+                    self.shop_pending_gold = int(it.get('price', 0))
+                    self.shop_confirm_ix = 1
+                    self.shop_confirm_return = 'buy_class_items'
+                    self.shop_phase = 'buy_confirm'
+            elif event.key == pygame.K_ESCAPE:
+                self.shop_phase = 'buy_class_select'
         # Phase: buy_confirm
         elif self.shop_phase == 'buy_confirm':
             if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):
@@ -6124,9 +6250,9 @@ class Game:
                         if self.shop_pending_iid:
                             self.party.inventory.append(self.shop_pending_iid)
                         self.log.add(f"Bought {self.shop_pending_name}.")
-                self.shop_phase = 'buy_items'
+                self.shop_phase = self.shop_confirm_return or 'buy_general'
             elif event.key == pygame.K_ESCAPE:
-                self.shop_phase = 'buy_items'
+                self.shop_phase = self.shop_confirm_return or 'buy_general'
         # Phase: sell_items
         elif self.shop_phase == 'sell_items':
             seen=set(); ordered=[]
@@ -6140,7 +6266,7 @@ class Game:
                 self.shop_sell_item_ix = (self.shop_sell_item_ix + 1) % n
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 if self.shop_sell_item_ix == len(ordered):
-                    self.shop_phase = 'menu'; self.shop_index = 1
+                    self.shop_phase = 'menu'; self.shop_index = 2
                 else:
                     if not ordered:
                         return
@@ -6153,7 +6279,7 @@ class Game:
                     self.shop_confirm_ix = 1
                     self.shop_phase = 'sell_confirm'
             elif event.key == pygame.K_ESCAPE:
-                self.shop_phase = 'menu'; self.shop_index = 1
+                self.shop_phase = 'menu'; self.shop_index = 2
         # Phase: sell_confirm
         elif self.shop_phase == 'sell_confirm':
             if event.key in (pygame.K_UP, pygame.K_k, pygame.K_DOWN, pygame.K_j):

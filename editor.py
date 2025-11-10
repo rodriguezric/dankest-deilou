@@ -7,6 +7,8 @@ LVL_DIR = os.path.join(DATA_DIR, 'levels')
 
 T_EMPTY, T_WALL, T_TOWN, T_STAIRS_D, T_STAIRS_U = 0, 1, 2, 3, 4
 
+SHOP_DEFAULT_CLASSES = ["Fighter", "Mage", "Priest", "Rogue"]
+
 def load_json(path, default):
     try:
         with open(path) as f:
@@ -68,15 +70,78 @@ def items_menu():
     ipath = os.path.join(DATA_DIR, 'items.json')
     spath = os.path.join(DATA_DIR, 'shop.json')
     items: List[Dict[str, Any]] = load_json(ipath, [])
-    shop_ids: List[str] = load_json(spath, [it.get('id') for it in items])
+    default_ids = [it.get('id') for it in items if it.get('id')]
+    shop_raw = load_json(spath, None)
+
+    def dedupe(seq: List[str]) -> List[str]:
+        seen = set(); out: List[str] = []
+        for iid in seq:
+            if not iid or iid in seen:
+                continue
+            seen.add(iid)
+            out.append(iid)
+        return out
+
+    shop_general: List[str]
+    shop_classes: Dict[str, List[str]]
+    if isinstance(shop_raw, dict):
+        raw_general = shop_raw.get('general')
+        shop_general = dedupe(list(raw_general)) if isinstance(raw_general, list) else []
+        class_data = shop_raw.get('class_gear')
+        if class_data is None:
+            class_data = shop_raw.get('classes', {})
+        shop_classes = {}
+        if isinstance(class_data, dict):
+            for cname, ids in class_data.items():
+                if isinstance(ids, list):
+                    shop_classes[cname] = dedupe(list(ids))
+    elif isinstance(shop_raw, list):
+        shop_general = dedupe(list(shop_raw))
+        shop_classes = {}
+    else:
+        shop_general = dedupe(list(default_ids))
+        shop_classes = {}
+
+    def ordered_class_payload() -> Dict[str, List[str]]:
+        payload: Dict[str, List[str]] = {}
+        for cname in SHOP_DEFAULT_CLASSES:
+            ids = shop_classes.get(cname)
+            if ids:
+                payload[cname] = ids
+        for cname, ids in shop_classes.items():
+            if cname not in payload and ids:
+                payload[cname] = ids
+        return payload
+
+    def drop_from_classes(iid: str):
+        for cname in list(shop_classes.keys()):
+            ids = shop_classes.get(cname, [])
+            if iid in ids:
+                while iid in ids:
+                    ids.remove(iid)
+                if not ids:
+                    shop_classes.pop(cname, None)
+
+    def remove_from_general(iid: str):
+        while iid in shop_general:
+            shop_general.remove(iid)
+
     def save_all():
         save_json(ipath, items)
-        save_json(spath, shop_ids)
+        payload = {"general": shop_general, "class_gear": ordered_class_payload()}
+        save_json(spath, payload)
     while True:
         print("\nItems:")
         for i, it in enumerate(items):
-            stock = ' [shop]' if it.get('id') in shop_ids else ''
-            print(f" {i+1}. {it.get('id')} — {it.get('name')} ({it.get('type')}){stock}")
+            iid = it.get('id')
+            tags: List[str] = []
+            if iid in shop_general:
+                tags.append('general')
+            for cname, ids in shop_classes.items():
+                if iid in ids:
+                    tags.append(cname)
+            stock = f" [{' / '.join(tags)}]" if tags else ''
+            print(f" {i+1}. {iid} — {it.get('name')} ({it.get('type')}){stock}")
         print(" a) Add  e) Edit  d) Delete  s) Toggle shop stock  q) Back")
         ch = input("> ").strip().lower()
         if ch == 'q': break
@@ -107,14 +172,48 @@ def items_menu():
             i = int(prompt('index')) - 1
             if 0 <= i < len(items):
                 iid = items[i].get('id'); items.pop(i)
-                if iid in shop_ids: shop_ids.remove(iid)
+                if iid:
+                    remove_from_general(iid)
+                    drop_from_classes(iid)
                 save_all()
         elif ch == 's':
             i = int(prompt('index')) - 1
             if 0 <= i < len(items):
                 iid = items[i].get('id')
-                if iid in shop_ids: shop_ids.remove(iid)
-                else: shop_ids.append(iid)
+                if not iid:
+                    continue
+                bucket = prompt('stock group (general / class name)', 'general')
+                if not bucket:
+                    continue
+                bucket = bucket.strip()
+                if bucket.lower().startswith('g'):
+                    if iid in shop_general:
+                        remove_from_general(iid)
+                        print(f"Removed {iid} from general stock.")
+                    else:
+                        drop_from_classes(iid)
+                        shop_general.append(iid)
+                        print(f"Added {iid} to general stock.")
+                else:
+                    cname = None
+                    for name in list(shop_classes.keys()) + SHOP_DEFAULT_CLASSES:
+                        if name.lower() == bucket.lower():
+                            cname = name
+                            break
+                    if cname is None:
+                        cname = bucket
+                    lst = shop_classes.setdefault(cname, [])
+                    if iid in lst:
+                        while iid in lst:
+                            lst.remove(iid)
+                        if not lst:
+                            shop_classes.pop(cname, None)
+                        print(f"Removed {iid} from {cname} gear.")
+                    else:
+                        remove_from_general(iid)
+                        drop_from_classes(iid)
+                        lst.append(iid)
+                        print(f"Added {iid} to {cname} gear.")
                 save_all()
 
 # -------- Skills --------
