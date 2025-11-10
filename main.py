@@ -21,7 +21,7 @@ import os
 import random
 import math
 from dataclasses import dataclass, asdict, field
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Sequence
 
 import pygame
 
@@ -4247,6 +4247,11 @@ class Game:
         self.shop_pending_iid: Optional[str] = None
         self.shop_pending_name: str = ''
         self.shop_pending_gold: int = 0
+        self.shop_pending_dialog_lines: List[str] = []
+        self.shop_dialog_text: str = ''
+        self.shop_dialog_type_t0: int = 0
+        self.shop_dialog_typer_prev_chars: int = 0
+        self.shop_dialog_voice_key: str = 'voice_human_man'
         self.shop_index = 0       # generic index for current phase
         self.shop_buy_ix = 0
         self.shop_class_ix = 0
@@ -6054,6 +6059,199 @@ class Game:
         except Exception:
             return 3
 
+    def _join_with_and(self, parts: Sequence[str]) -> str:
+        if not parts:
+            return ''
+        if len(parts) == 1:
+            return parts[0]
+        if len(parts) == 2:
+            return f"{parts[0]} and {parts[1]}"
+        return ', '.join(parts[:-1]) + f", and {parts[-1]}"
+
+    def _stat_phrase(self, amount: Any, label: str) -> Optional[str]:
+        try:
+            val = float(amount)
+        except (TypeError, ValueError):
+            return None
+        is_int = abs(val - int(val)) < 1e-6
+        mag = int(val) if is_int else round(val, 2)
+        if val > 0:
+            return f"adds +{mag} {label}"
+        if val < 0:
+            mag = abs(mag)
+            return f"reduces {label} by {mag}"
+        return None
+
+    def _collect_item_feature_phrases(self, item: Dict[str, Any]) -> List[str]:
+        features: List[str] = []
+        stat_labels = (
+            ('atk', 'ATK'),
+            ('ac', 'AC'),
+            ('hp', 'HP'),
+            ('mp', 'MP'),
+            ('agi', 'AGI'),
+            ('vit', 'VIT'),
+            ('iq', 'IQ'),
+            ('pie', 'PIE'),
+            ('luck', 'LUC'),
+            ('str', 'STR'),
+        )
+        for key, label in stat_labels:
+            if key in item:
+                phrase = self._stat_phrase(item.get(key), label)
+                if phrase:
+                    features.append(phrase)
+
+        if 'max_mp_up' in item:
+            amt = item.get('max_mp_up')
+            if isinstance(amt, (int, float)):
+                amt_val = int(amt) if abs(amt - int(amt)) < 1e-6 else amt
+                features.append(f"permanently increases max MP by {amt_val}")
+        if item.get('trait_select'):
+            features.append("teaches a new personal trait")
+
+        heal_low = item.get('heal_low')
+        heal_high = item.get('heal_high')
+        if heal_low is not None and heal_high is not None:
+            features.append(f"restores {heal_low}-{heal_high} HP")
+        elif 'heal' in item:
+            features.append(f"restores {item.get('heal')} HP")
+
+        mp_low = item.get('mp_low')
+        mp_high = item.get('mp_high')
+        if mp_low is not None and mp_high is not None:
+            features.append(f"restores {mp_low}-{mp_high} MP")
+
+        if 'status_resist' in item and isinstance(item.get('status_resist'), dict):
+            resists = []
+            for status, val in item['status_resist'].items():
+                pct = val
+                if isinstance(val, (int, float)) and val <= 1:
+                    pct = int(round(val * 100))
+                elif isinstance(val, (int, float)):
+                    pct = int(round(val))
+                resists.append(f"{pct}% {status}")
+            if resists:
+                resist_txt = self._join_with_and(resists)
+                features.append(f"provides {resist_txt} resistance")
+
+        status_proc = item.get('status_proc_bonus')
+        if isinstance(status_proc, (int, float)) and status_proc:
+            pct = status_proc * 100 if status_proc <= 1 else status_proc
+            pct_val = int(round(pct))
+            features.append(f"adds {pct_val}% status proc chance")
+
+        on_hit = item.get('on_hit_status')
+        if isinstance(on_hit, dict):
+            name = str(on_hit.get('name', '')).title() or 'a status'
+            chance = on_hit.get('chance')
+            stacks = on_hit.get('stacks')
+            chance_pct = None
+            if isinstance(chance, (int, float)):
+                chance_pct = chance * 100 if chance <= 1 else chance
+            bits = []
+            if chance_pct is not None:
+                bits.append(f"{int(round(chance_pct))}% chance")
+            if stacks:
+                bits.append(f"{stacks} stack{'s' if stacks != 1 else ''}")
+            joined = ' with ' + ' and '.join(bits) if bits else ''
+            features.append(f"inflicts {name}{joined}")
+
+        return features
+
+    def _build_feature_sentence(self, features: List[str]) -> str:
+        if not features:
+            return ''
+        if len(features) == 1:
+            return f"It {features[0]}."
+        joined = self._join_with_and(features)
+        return f"It {joined}."
+
+    def _build_merchant_dialog_lines(self, item: Optional[Dict[str, Any]], price: int) -> List[str]:
+        data = item or {}
+        name = data.get('name', 'item')
+        desc = str(data.get('desc', '')).strip()
+        if not desc:
+            desc = f"{name} ready for any expedition."
+        features = self._collect_item_feature_phrases(data)
+        lines: List[str] = []
+        lines.append(desc)
+        if features:
+            lines.append(self._build_feature_sentence(features))
+        price_line = f"It'll cost you {price}g. Want to buy it?"
+        lines.append(price_line)
+        return lines
+
+    def _prepare_shop_dialog(self, item: Optional[Dict[str, Any]], price: int) -> None:
+        self.shop_pending_dialog_lines = self._build_merchant_dialog_lines(item, price)
+        self._reset_shop_dialog_state()
+        self.shop_dialog_voice_key = 'voice_human_man'
+
+    def _reset_shop_dialog_state(self) -> None:
+        parts: List[str] = []
+        for ln in self.shop_pending_dialog_lines or []:
+            if ln is None:
+                continue
+            stripped = str(ln).strip()
+            if stripped:
+                parts.append(stripped)
+        text = ''
+        if parts:
+            body = '\n'.join(parts[:-1]) if len(parts) > 1 else ''
+            price_line = parts[-1]
+            if body:
+                text = f"{body}\n\n{price_line}"
+            else:
+                text = price_line
+        if not text:
+            name = self.shop_pending_name or 'this item'
+            price = self.shop_pending_gold
+            text = f"Finest {name} for {price}g. Interested?"
+        self.shop_dialog_text = text
+        self.shop_dialog_type_t0 = pygame.time.get_ticks()
+        self.shop_dialog_typer_prev_chars = 0
+
+    def _draw_shop_message_window(self, view: pygame.Surface) -> pygame.Rect:
+        s = pygame.Surface((WIDTH, VIEW_H), pygame.SRCALPHA)
+        s.fill((0, 0, 0, 160))
+        view.blit(s, (0, 0))
+        pad_x, pad_y = 16, 12
+        title = "Trader"
+        text_h = self.r.font.get_height()
+        top_h = max(80, VIEW_H // 4)
+        x = 20; y = 10; w = WIDTH - 40; h = top_h
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(view, (18, 18, 26), rect)
+        pygame.draw.rect(view, YELLOW, rect, 2)
+        self.r.text_big(view, title, (x + pad_x, y + pad_y), YELLOW)
+        if not self.shop_dialog_type_t0:
+            self.shop_dialog_type_t0 = pygame.time.get_ticks()
+        text = self.shop_dialog_text or ''
+        now = pygame.time.get_ticks()
+        elapsed = max(0, now - self.shop_dialog_type_t0)
+        cps = 40.0
+        shown = int(cps * (elapsed / 1000.0))
+        shown_clamped = min(shown, len(text))
+        self._window_voice_tick(text, 'shop_dialog_typer_prev_chars', shown_clamped, self.shop_dialog_voice_key)
+        partial = text[:shown_clamped]
+        max_w = w - pad_x * 2
+        lines: List[str] = []
+        parts = partial.split('\n') if partial else []
+        for raw in parts:
+            if raw == '':
+                lines.append('')
+                continue
+            wrapped = self._wrap_text(raw, max_w)
+            lines.extend(wrapped if wrapped else [''])
+        cy = y + pad_y + text_h + 16
+        for ln in lines:
+            if not ln:
+                cy += text_h
+                continue
+            self.r.text(view, ln, (x + pad_x, cy))
+            cy += text_h
+        return rect
+
     # --------------- Shop / Temple / Training ---------------
     def draw_shop(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
@@ -6099,12 +6297,12 @@ class Game:
             s.fill((0,0,0,160)); view.blit(s,(0,0))
             name = self.shop_pending_name or 'Item'
             gold = self.shop_pending_gold
-            msg = f"Do you want to buy {name} for {gold}g?"
-            tw = self.r.font_big.size(msg)[0]
-            tx = WIDTH//2 - tw//2
-            ty = VIEW_H//2 - 80
-            self.r.text_big(view, msg, (tx, ty))
-            self.r.draw_center_menu(["Yes","No"], self.shop_confirm_ix)
+            if not self.shop_pending_dialog_lines:
+                base_item = ITEMS_BY_ID.get(self.shop_pending_iid or '', {'name': name})
+                self._prepare_shop_dialog(base_item, gold)
+            panel_rect = self._draw_shop_message_window(view)
+            menu_top = panel_rect.bottom + 16
+            self.r.draw_center_menu(["Yes","No"], self.shop_confirm_ix, min_top=max(40, menu_top))
         elif self.shop_phase in ('sell_items', 'sell_confirm'):
             # Condensed list with quantities, centered menu (names only)
             ordered: List[str] = []
@@ -6181,6 +6379,7 @@ class Game:
                     self.shop_pending_iid = it.get('id', '')
                     self.shop_pending_name = it.get('name', 'Item')
                     self.shop_pending_gold = int(it.get('price', 0))
+                    self._prepare_shop_dialog(it, self.shop_pending_gold)
                     self.shop_confirm_ix = 1
                     self.shop_confirm_return = 'buy_general'
                     self.shop_phase = 'buy_confirm'
@@ -6231,6 +6430,7 @@ class Game:
                     self.shop_pending_iid = it.get('id', '')
                     self.shop_pending_name = it.get('name', 'Item')
                     self.shop_pending_gold = int(it.get('price', 0))
+                    self._prepare_shop_dialog(it, self.shop_pending_gold)
                     self.shop_confirm_ix = 1
                     self.shop_confirm_return = 'buy_class_items'
                     self.shop_phase = 'buy_confirm'
@@ -7361,6 +7561,35 @@ class Game:
             lines.append(cur)
         return lines
 
+    def _window_voice_tick(self, line: str, prev_attr: str, shown_chars: int, voice_key: Optional[str]) -> None:
+        try:
+            prev = int(getattr(self, prev_attr, 0))
+        except Exception:
+            prev = 0
+        if shown_chars <= prev:
+            return
+        idx = shown_chars - 1
+        if idx < 0 or idx >= len(line):
+            setattr(self, prev_attr, shown_chars)
+            return
+        ch = line[idx]
+        if not (isinstance(ch, str) and ch.isalpha()):
+            setattr(self, prev_attr, shown_chars)
+            return
+        key = voice_key or 'typer'
+        fallback = 'typer'
+        if not self.sfx or not isinstance(self.sfx, SfxManager):
+            setattr(self, prev_attr, shown_chars)
+            return
+        if key not in self.sfx.sounds or self.sfx.sounds.get(key) is None:
+            if fallback not in self.sfx.sounds or self.sfx.sounds.get(fallback) is None:
+                setattr(self, prev_attr, shown_chars)
+                return
+            key = fallback
+        vol = 0.18 + random.random() * 0.06
+        self.sfx.play(key, vol)
+        setattr(self, prev_attr, shown_chars)
+
     def draw_dialog(self):
         view = self.screen.subsurface(pygame.Rect(0, 0, WIDTH, VIEW_H))
         # Dim background
@@ -7388,23 +7617,10 @@ class Game:
         self.dialog_type_chars = shown_clamped
         # Voice tick per newly revealed character (talk phase only)
         if self.dialog_phase == 'talk':
-            try:
-                prev = int(getattr(self, 'dialog_typer_prev_chars', 0))
-                if shown_clamped > prev:
-                    # Only tick once per frame for the most recently revealed character,
-                    # and only if it is a letter (skip spaces/punctuation)
-                    idx = shown_clamped - 1
-                    if 0 <= idx < len(line):
-                        ch = line[idx]
-                        if isinstance(ch, str) and ch.isalpha():
-                            voice_id = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {}).get('voice', 'human_man')
-                            key = f"voice_{voice_id}"
-                            vol = 0.18 + random.random() * 0.06
-                            if self.sfx and (self.sfx.sounds.get(key) or self.sfx.sounds.get('typer')):
-                                self.sfx.play(key if self.sfx.sounds.get(key) else 'typer', vol)
-                    self.dialog_typer_prev_chars = shown_clamped
-            except Exception:
-                pass
+            npc = (getattr(self, 'npcs_by_id', {}) or {}).get(self.dialog_npc_id, {})
+            voice_id = npc.get('voice', 'human_man')
+            voice_key = f"voice_{voice_id}" if voice_id else None
+            self._window_voice_tick(line, 'dialog_typer_prev_chars', shown_clamped, voice_key)
         # Ensure description is shown whenever we are on the root menu
         if self.dialog_phase == 'root':
             try:
