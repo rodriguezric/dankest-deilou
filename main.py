@@ -7896,9 +7896,9 @@ class Game:
                         if self.party.inventory and actives and self.items_selected_iid:
                             iid = self.items_selected_iid
                             target = actives[self.items_target_ix]
-                            self.use_item(target, iid)
+                            consumed = self.use_item(target, iid)
                             it = ITEMS_BY_ID.get(iid, {})
-                            if it.get('type') == 'consumable':
+                            if consumed and it.get('type') == 'consumable':
                                 # remove a single instance of the used item
                                 try:
                                     self.party.inventory.remove(iid)
@@ -7920,18 +7920,18 @@ class Game:
                 elif event.key == pygame.K_ESCAPE:
                     self.items_phase = 'item_action'
 
-    def use_item(self, target: Character, iid: str):
+    def use_item(self, target: Character, iid: str) -> bool:
         it = ITEMS_BY_ID.get(iid)
         if not it:
             self.log.add("Nothing happens.")
-            return
+            return False
         if it.get('type') == 'consumable':
             if it.get('trait_select'):
                 try:
                     member_ix = self.party.members.index(target)
                 except ValueError:
                     self.log.add("Nothing happens.")
-                    return
+                    return False
                 name = it.get('name', 'Trait Tome')
                 self.log.add(f"{target.name} studies the {name}.")
                 if hasattr(self, 'items_phase'):
@@ -7940,7 +7940,21 @@ class Game:
                 if return_mode == MODE_BATTLE:
                     return_mode = MODE_PARTY
                 self.start_trait_selection(member_ix, return_mode=return_mode)
-                return
+                return True
+            if iid == 'return_scroll':
+                in_labyrinth = (self.mode == MODE_MAZE) or (getattr(self, 'return_mode', None) == MODE_MAZE)
+                if in_labyrinth:
+                    self.log.add("A burst of light erupts from the Return Scroll! You are whisked back to town.")
+                    self.mode = MODE_TOWN
+                    self.return_mode = MODE_TOWN
+                    self.pause_confirming_quit = False
+                    self.pause_index = 0
+                    # Clear pause/items overlays so town renders immediately
+                    self.items_phase = 'items'
+                    return True
+                else:
+                    self.log.add("Nothing happens. The scroll only works in the labyrinth.")
+                    return False
             name = it.get('name', 'Item')
             lower = name.lower()
             # HP heal
@@ -7954,6 +7968,7 @@ class Game:
                 target.hp = min(target.max_hp, target.hp + heal)
                 verb = 'eats' if 'cheese' in lower else ('drinks' if ('potion' in lower or 'droplet' in lower) else 'uses')
                 self.log.add(f"{target.name} {verb} {name} (+{target.hp - before} HP).")
+                return True
             # MP restore
             elif ('mp' in it) or ('mp_low' in it) or ('mp_high' in it):
                 low = int(it.get('mp_low', it.get('mp', 0)))
@@ -7965,6 +7980,7 @@ class Game:
                 target.mp = min(target.max_mp, target.mp + gain)
                 verb = 'drinks'
                 self.log.add(f"{target.name} {verb} {name} (+{target.mp - before} MP).")
+                return True
             # Max MP increase (permanent)
             elif 'max_mp_up' in it:
                 inc = int(it.get('max_mp_up', 0))
@@ -7972,8 +7988,10 @@ class Game:
                 target.max_mp = max(0, before + inc)
                 target.mp = min(target.max_mp, target.mp + inc)
                 self.log.add(f"{target.name} uses {name} (+{inc} Max MP).")
+                return True
         else:
             self.log.add("Nothing happens.")
+        return False
 
     # --------------- Equip ---------------
     def _slot_name(self, ix: int) -> str:
