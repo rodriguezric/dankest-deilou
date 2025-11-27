@@ -4115,7 +4115,9 @@ class Battle:
         if target_i is None:
             return None
         e = self.enemies[target_i]
-        hit_chance = 0.65 + actor.atk_bonus * 0.03 - (10 - e.ac) * 0.02
+        base_hit = 0.75  # slightly higher baseline chance so fights feel snappier
+        agi_mod = ability_mod(actor.agi_effective)
+        hit_chance = base_hit + agi_mod * 0.025 - (10 - e.ac) * 0.02
         hit = random.random() < hit_chance
         dmg = max(1, random.randint(1, 6) + actor.atk_bonus)
         gi = self.party.members.index(actor)
