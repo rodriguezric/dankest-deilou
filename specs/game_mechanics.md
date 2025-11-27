@@ -37,7 +37,7 @@
 
 ## Combat Resolution
 ### Player Basic Attack (`make_attack_action`)
-- **Hit Chance**: `0.65 + atk_bonus * 0.03 - (10 - enemy_ac) * 0.02`. Clamped implicitly by RNG.
+- **Hit Chance**: `0.75 + ability_mod(agi) * 0.025 - (10 - enemy_ac) * 0.02`. Higher base accuracy and AGI scaling make nimble heroes land strikes more reliably.
 - **Damage**: `randint(1, 6) + atk_bonus`, minimum 1.
 - **Vulnerable** on target: ×1.5 (ceil). **Weak** on attacker: ×0.5 (ceil).
 
@@ -100,4 +100,3 @@ Status stacks cap at **9**. Messages logged on first application and expiry.
 - Music crossfades on mode changes; elite battles trigger `MUSIC_ELITE_BATTLE`.
 - SFX triggered for hits, heals, misses, footsteps, typewriter log.
 - Floating text uses duration-based pruning (`floaters`) to keep HUD clean.
-
